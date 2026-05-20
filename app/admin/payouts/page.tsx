@@ -3,7 +3,9 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowRight,
+  CalendarClock,
   CheckCircle2,
   CircleDollarSign,
   Clock,
@@ -20,8 +22,11 @@ type Payout = {
   id: string;
   fund_space_id: string;
   round_id: string;
-  user_id: string;
-  amount: number;
+  user_id?: string;
+  recipient_user_id?: string;
+  amount?: number;
+  gross_amount?: number;
+  net_amount?: number;
   status: string;
   approved_at: string | null;
   paid_at: string | null;
@@ -38,7 +43,8 @@ type FundSpace = {
 type Round = {
   id: string;
   round_number: number;
-  due_date: string | null;
+  due_date?: string | null;
+  contribution_deadline?: string | null;
   status: string | null;
 };
 
@@ -60,7 +66,10 @@ type PayoutRow = Payout & {
 };
 
 function formatCurrency(amount: number | null | undefined) {
-  return `GH₵${Number(amount || 0).toLocaleString()}`;
+  return `GH₵${Number(amount || 0).toLocaleString('en-GH', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 function formatDate(dateString: string | null | undefined) {
@@ -73,8 +82,31 @@ function formatDate(dateString: string | null | undefined) {
   });
 }
 
+function getGhanaWeekday() {
+  return new Intl.DateTimeFormat('en-US', {
+    weekday: 'long',
+    timeZone: 'Africa/Accra',
+  }).format(new Date());
+}
+
+function isFridayInGhana() {
+  return getGhanaWeekday() === 'Friday';
+}
+
+function getPayoutAmount(payout: PayoutRow) {
+  return Number(payout.net_amount ?? payout.amount ?? payout.gross_amount ?? 0);
+}
+
+function getPayoutUserId(payout: Payout) {
+  return payout.recipient_user_id || payout.user_id || '';
+}
+
+function getRoundDueDate(round: Round | null | undefined) {
+  return round?.contribution_deadline || round?.due_date || null;
+}
+
 function getStatusStyle(status: string | null | undefined) {
-  const value = status || 'PENDING';
+  const value = String(status || 'PENDING').toUpperCase();
 
   if (['PAID', 'APPROVED', 'COMPLETED'].includes(value)) {
     return 'bg-emerald-50 text-emerald-700 border-emerald-100';
@@ -91,6 +123,13 @@ function getStatusStyle(status: string | null | undefined) {
   return 'bg-gray-50 text-gray-700 border-gray-100';
 }
 
+function getReadableStatus(status: string | null | undefined) {
+  return String(status || 'PENDING')
+    .replaceAll('_', ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 export default function AdminPayoutsPage() {
   const [payouts, setPayouts] = useState<PayoutRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -104,6 +143,9 @@ export default function AdminPayoutsPage() {
   const [rejectPayoutId, setRejectPayoutId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
 
+  const fridayApprovalOpen = isFridayInGhana();
+  const ghanaWeekday = getGhanaWeekday();
+
   useEffect(() => {
     loadPayouts();
   }, []);
@@ -114,10 +156,6 @@ export default function AdminPayoutsPage() {
       setErrorMessage('');
       setSuccessMessage('');
 
-      /*
-        First try relationship query.
-        If Supabase relationships are not detected, the fallback below will still load payouts.
-      */
       const { data, error } = await supabase
         .from('fund_space_payouts')
         .select(
@@ -132,7 +170,7 @@ export default function AdminPayoutsPage() {
           round:fund_space_rounds (
             id,
             round_number,
-            due_date,
+            contribution_deadline,
             status
           ),
           profile:profiles (
@@ -185,27 +223,35 @@ export default function AdminPayoutsPage() {
       return;
     }
 
-    const fundSpaceIds = Array.from(new Set(basePayouts.map((item) => item.fund_space_id)));
-    const roundIds = Array.from(new Set(basePayouts.map((item) => item.round_id)));
-    const userIds = Array.from(new Set(basePayouts.map((item) => item.user_id)));
+    const fundSpaceIds = Array.from(
+      new Set(basePayouts.map((item) => item.fund_space_id))
+    ).filter(Boolean);
 
-    const [
-      fundSpacesResponse,
-      roundsResponse,
-      profilesResponse,
-    ] = await Promise.all([
-      supabase.from('fund_spaces').select('*').in('id', fundSpaceIds),
-      supabase.from('fund_space_rounds').select('*').in('id', roundIds),
-      supabase
-        .from('profiles')
-        .select(
-          'id, full_name, phone, email, momo_number, bank_name, bank_account_number, bank_account_name'
-        )
-        .in('id', userIds),
-    ]);
+    const roundIds = Array.from(
+      new Set(basePayouts.map((item) => item.round_id))
+    ).filter(Boolean);
+
+    const userIds = Array.from(
+      new Set(basePayouts.map((item) => getPayoutUserId(item)))
+    ).filter(Boolean);
+
+    const [fundSpacesResponse, roundsResponse, profilesResponse] =
+      await Promise.all([
+        supabase.from('fund_spaces').select('*').in('id', fundSpaceIds),
+        supabase.from('fund_space_rounds').select('*').in('id', roundIds),
+        supabase
+          .from('profiles')
+          .select(
+            'id, full_name, phone, email, momo_number, bank_name, bank_account_number, bank_account_name'
+          )
+          .in('id', userIds),
+      ]);
 
     if (fundSpacesResponse.error) {
-      console.warn('Fund Spaces fallback warning:', fundSpacesResponse.error.message);
+      console.warn(
+        'Fund Spaces fallback warning:',
+        fundSpacesResponse.error.message
+      );
     }
 
     if (roundsResponse.error) {
@@ -222,15 +268,25 @@ export default function AdminPayoutsPage() {
 
     const rows: PayoutRow[] = basePayouts.map((payout) => ({
       ...payout,
-      fund_space: fundSpaces.find((item) => item.id === payout.fund_space_id) || null,
+      fund_space:
+        fundSpaces.find((item) => item.id === payout.fund_space_id) || null,
       round: rounds.find((item) => item.id === payout.round_id) || null,
-      profile: profiles.find((item) => item.id === payout.user_id) || null,
+      profile:
+        profiles.find((item) => item.id === getPayoutUserId(payout)) || null,
     }));
 
     setPayouts(rows);
   };
 
   const handleApprovePayout = async (payoutId: string) => {
+    if (!fridayApprovalOpen) {
+      setErrorMessage(
+        `Payout approvals are only allowed on Fridays. Today is ${ghanaWeekday} in Ghana.`
+      );
+      setSuccessMessage('');
+      return;
+    }
+
     try {
       setActionLoadingId(payoutId);
       setErrorMessage('');
@@ -306,8 +362,8 @@ export default function AdminPayoutsPage() {
       setSuccessMessage('');
 
       const { error } = await supabase.rpc('mark_fund_space_payout_paid', {
-          p_payout_id: payoutId,
-          p_payout_method: ''
+        p_payout_id: payoutId,
+        p_payout_method: 'MOMO',
       });
 
       if (error) {
@@ -330,17 +386,23 @@ export default function AdminPayoutsPage() {
 
   const stats = useMemo(() => {
     const total = payouts.length;
+
     const pending = payouts.filter((item) =>
       ['PENDING', 'PENDING_ADMIN_APPROVAL'].includes(item.status)
     ).length;
+
     const approved = payouts.filter((item) => item.status === 'APPROVED').length;
     const paid = payouts.filter((item) => item.status === 'PAID').length;
     const rejected = payouts.filter((item) => item.status === 'REJECTED').length;
 
-    const totalAmount = payouts.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const totalAmount = payouts.reduce(
+      (sum, item) => sum + getPayoutAmount(item),
+      0
+    );
+
     const pendingAmount = payouts
       .filter((item) => ['PENDING', 'PENDING_ADMIN_APPROVAL'].includes(item.status))
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      .reduce((sum, item) => sum + getPayoutAmount(item), 0);
 
     return {
       total,
@@ -359,8 +421,10 @@ export default function AdminPayoutsPage() {
       const phone = item.profile?.phone || '';
       const email = item.profile?.email || '';
       const groupName = item.fund_space?.name || '';
-      const roundNumber = item.round?.round_number ? String(item.round.round_number) : '';
-      const amount = String(item.amount || '');
+      const roundNumber = item.round?.round_number
+        ? String(item.round.round_number)
+        : '';
+      const amount = String(getPayoutAmount(item) || '');
       const status = item.status || '';
 
       const searchValue = searchTerm.toLowerCase();
@@ -406,8 +470,9 @@ export default function AdminPayoutsPage() {
             </h1>
 
             <p className="mt-3 max-w-2xl text-sm leading-7 text-emerald-50 md:text-base">
-              Review, approve, reject, and mark Fund Space payouts as paid. This is one of the most
-              sensitive areas of TrustPoint Fund Space, so every payout must be checked carefully.
+              Review, approve, reject, and mark Fund Space payouts as paid.
+              To keep the payout schedule uniform, payout approvals are only
+              allowed on Fridays.
             </p>
           </div>
 
@@ -422,15 +487,75 @@ export default function AdminPayoutsPage() {
         </div>
       </div>
 
+      <div
+        className={`rounded-3xl border p-6 ${
+          fridayApprovalOpen
+            ? 'border-emerald-100 bg-emerald-50'
+            : 'border-amber-100 bg-amber-50'
+        }`}
+      >
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div className="flex gap-3">
+            <div
+              className={`mt-1 rounded-2xl p-3 ${
+                fridayApprovalOpen
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : 'bg-amber-100 text-amber-700'
+              }`}
+            >
+              {fridayApprovalOpen ? (
+                <CheckCircle2 size={22} />
+              ) : (
+                <CalendarClock size={22} />
+              )}
+            </div>
+
+            <div>
+              <h2
+                className={`text-lg font-black ${
+                  fridayApprovalOpen ? 'text-emerald-900' : 'text-amber-900'
+                }`}
+              >
+                {fridayApprovalOpen
+                  ? 'Friday approval window is open'
+                  : 'Payout approval is locked until Friday'}
+              </h2>
+
+              <p
+                className={`mt-2 max-w-3xl text-sm leading-6 ${
+                  fridayApprovalOpen ? 'text-emerald-700' : 'text-amber-700'
+                }`}
+              >
+                {fridayApprovalOpen
+                  ? 'Admins can approve pending Fund Space payouts today. Please still verify the receiver, round, and contribution records before approving.'
+                  : `Today is ${ghanaWeekday} in Ghana. To keep all payout schedules uniform, admins can only approve pending payouts on Fridays.`}
+              </p>
+            </div>
+          </div>
+
+          <span
+            className={`w-fit rounded-full border px-4 py-2 text-xs font-black uppercase tracking-wide ${
+              fridayApprovalOpen
+                ? 'border-emerald-200 bg-white text-emerald-700'
+                : 'border-amber-200 bg-white text-amber-700'
+            }`}
+          >
+            Ghana time
+          </span>
+        </div>
+      </div>
+
       {errorMessage && (
-        <div className="rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">
-          {errorMessage}
+        <div className="flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+          <p>{errorMessage}</p>
         </div>
       )}
 
       {successMessage && (
-        <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm text-emerald-700">
-          {successMessage}
+        <div className="flex items-start gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm text-emerald-700">
+          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
+          <p>{successMessage}</p>
         </div>
       )}
 
@@ -440,7 +565,9 @@ export default function AdminPayoutsPage() {
             <WalletCards size={24} />
           </div>
           <p className="text-sm text-gray-500">Total Payouts</p>
-          <h3 className="mt-1 text-3xl font-black text-gray-900">{stats.total}</h3>
+          <h3 className="mt-1 text-3xl font-black text-gray-900">
+            {stats.total}
+          </h3>
         </div>
 
         <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
@@ -448,7 +575,9 @@ export default function AdminPayoutsPage() {
             <Clock size={24} />
           </div>
           <p className="text-sm text-gray-500">Pending</p>
-          <h3 className="mt-1 text-3xl font-black text-gray-900">{stats.pending}</h3>
+          <h3 className="mt-1 text-3xl font-black text-gray-900">
+            {stats.pending}
+          </h3>
         </div>
 
         <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
@@ -456,7 +585,9 @@ export default function AdminPayoutsPage() {
             <CheckCircle2 size={24} />
           </div>
           <p className="text-sm text-gray-500">Approved</p>
-          <h3 className="mt-1 text-3xl font-black text-gray-900">{stats.approved}</h3>
+          <h3 className="mt-1 text-3xl font-black text-gray-900">
+            {stats.approved}
+          </h3>
         </div>
 
         <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
@@ -464,7 +595,9 @@ export default function AdminPayoutsPage() {
             <CircleDollarSign size={24} />
           </div>
           <p className="text-sm text-gray-500">Paid</p>
-          <h3 className="mt-1 text-3xl font-black text-gray-900">{stats.paid}</h3>
+          <h3 className="mt-1 text-3xl font-black text-gray-900">
+            {stats.paid}
+          </h3>
         </div>
 
         <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
@@ -472,7 +605,9 @@ export default function AdminPayoutsPage() {
             <XCircle size={24} />
           </div>
           <p className="text-sm text-gray-500">Rejected</p>
-          <h3 className="mt-1 text-3xl font-black text-gray-900">{stats.rejected}</h3>
+          <h3 className="mt-1 text-3xl font-black text-gray-900">
+            {stats.rejected}
+          </h3>
         </div>
       </div>
 
@@ -522,7 +657,9 @@ export default function AdminPayoutsPage() {
             >
               <option value="ALL">All Statuses</option>
               <option value="PENDING">Pending</option>
-              <option value="PENDING_ADMIN_APPROVAL">Pending Admin Approval</option>
+              <option value="PENDING_ADMIN_APPROVAL">
+                Pending Admin Approval
+              </option>
               <option value="APPROVED">Approved</option>
               <option value="PAID">Paid</option>
               <option value="REJECTED">Rejected</option>
@@ -606,7 +743,7 @@ export default function AdminPayoutsPage() {
                             {payout.fund_space?.name || 'Fund Space'}
                           </p>
                           <Link
-                            href={`/admin/fund-spaces/${payout.fund_space_id}`}
+                            href={`/admin/fund-space/${payout.fund_space_id}`}
                             className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 hover:text-emerald-700"
                           >
                             View group
@@ -619,13 +756,13 @@ export default function AdminPayoutsPage() {
                             Round {payout.round?.round_number ?? 'Unknown'}
                           </p>
                           <p className="mt-1 text-xs text-gray-500">
-                            Due: {formatDate(payout.round?.due_date)}
+                            Due: {formatDate(getRoundDueDate(payout.round))}
                           </p>
                         </td>
 
                         <td className="px-5 py-5">
                           <p className="font-black text-gray-900">
-                            {formatCurrency(payout.amount)}
+                            {formatCurrency(getPayoutAmount(payout))}
                           </p>
                         </td>
 
@@ -639,8 +776,14 @@ export default function AdminPayoutsPage() {
                             payout.profile?.bank_account_name) && (
                             <div className="mt-2 text-xs text-gray-500">
                               <p>{payout.profile?.bank_name || 'No bank name'}</p>
-                              <p>{payout.profile?.bank_account_number || 'No account number'}</p>
-                              <p>{payout.profile?.bank_account_name || 'No account name'}</p>
+                              <p>
+                                {payout.profile?.bank_account_number ||
+                                  'No account number'}
+                              </p>
+                              <p>
+                                {payout.profile?.bank_account_name ||
+                                  'No account name'}
+                              </p>
                             </div>
                           )}
                         </td>
@@ -653,7 +796,7 @@ export default function AdminPayoutsPage() {
                           >
                             {isPaid && <CheckCircle2 size={13} />}
                             {isRejected && <XCircle size={13} />}
-                            {payout.status}
+                            {getReadableStatus(payout.status)}
                           </span>
 
                           {payout.approved_at && (
@@ -679,14 +822,21 @@ export default function AdminPayoutsPage() {
                               <>
                                 <button
                                   type="button"
-                                  disabled={isActionLoading}
+                                  disabled={isActionLoading || !fridayApprovalOpen}
                                   onClick={() => handleApprovePayout(payout.id)}
+                                  title={
+                                    fridayApprovalOpen
+                                      ? 'Approve this payout'
+                                      : 'Payout approvals are only allowed on Fridays'
+                                  }
                                   className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-gray-300"
                                 >
                                   {isActionLoading && (
                                     <Loader2 className="h-3 w-3 animate-spin" />
                                   )}
-                                  Approve
+                                  {fridayApprovalOpen
+                                    ? 'Approve'
+                                    : 'Approve Friday Only'}
                                 </button>
 
                                 <button
@@ -750,8 +900,8 @@ export default function AdminPayoutsPage() {
             <h2 className="text-xl font-bold text-gray-900">Reject Payout</h2>
 
             <p className="mt-2 text-sm leading-6 text-gray-500">
-              Please enter the reason why this payout is being rejected. This helps keep a clear
-              admin record.
+              Please enter the reason why this payout is being rejected. This
+              helps keep a clear admin record.
             </p>
 
             <textarea
@@ -791,12 +941,15 @@ export default function AdminPayoutsPage() {
       )}
 
       <div className="rounded-3xl border border-amber-100 bg-amber-50 p-6">
-        <h2 className="text-lg font-bold text-amber-800">Admin payout safety reminder</h2>
+        <h2 className="text-lg font-bold text-amber-800">
+          Admin payout safety reminder
+        </h2>
 
         <p className="mt-2 text-sm leading-6 text-amber-700">
-          Before approving or marking a payout as paid, confirm that the round is valid, the member
-          is the correct payout receiver, and all required contributions have been verified. This
-          helps protect TrustPoint Fund Space from fraud, mistakes, and disputes.
+          Before approving or marking a payout as paid, confirm that the round is
+          valid, the member is the correct payout receiver, and all required
+          contributions have been verified. Approval is restricted to Fridays so
+          the payout schedule remains consistent across TrustPoint Fund Space.
         </p>
       </div>
     </div>
