@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2017",
-    "ignoreDeprecations": "6.0",
+    "ignoreDeprecations": "5.0",
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
     "skipLibCheck": true,
@@ -29,6 +29,6 @@
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts"
-, ".next/types/app/admin/contributions/page.tsx", ".next/types/app/admin/fund-space/page.tsx"  ],
+  ],
   "exclude": ["node_modules"]
 }
