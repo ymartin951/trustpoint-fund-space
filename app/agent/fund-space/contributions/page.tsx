@@ -11,6 +11,8 @@ import {
   CircleDollarSign,
   Clock,
   CreditCard,
+  FileCheck2,
+  Info,
   Loader2,
   RefreshCw,
   Search,
@@ -21,6 +23,7 @@ import {
 
 import { supabase } from '@/lib/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { ManualMerchantPaymentModal } from '@/components/fund-space/ManualMerchantPaymentModal';
 
 type Summary = {
   total_contributions: number;
@@ -89,17 +92,6 @@ type ContributionsApiResponse = {
   contributions?: Contribution[];
 };
 
-type ContributionPaymentResponse = {
-  success?: boolean;
-  message?: string;
-  authorization_url?: string;
-  reference?: string;
-  payment_transaction_id?: string;
-  contribution_id?: string;
-  amount?: number;
-  existing_payment?: boolean;
-};
-
 type VerifyPaymentResponse = {
   success?: boolean;
   message?: string;
@@ -117,11 +109,17 @@ function formatCurrency(amount: number | null | undefined) {
 function formatDate(dateString: string | null | undefined) {
   if (!dateString) return 'Not set';
 
+  const date = new Date(dateString);
+
+  if (Number.isNaN(date.getTime())) {
+    return 'Invalid date';
+  }
+
   return new Intl.DateTimeFormat('en-GH', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
-  }).format(new Date(dateString));
+  }).format(date);
 }
 
 function formatLabel(value: string | null | undefined) {
@@ -248,15 +246,16 @@ export default function AgentFundSpaceContributionsPage() {
   });
 
   const [loading, setLoading] = useState(true);
-  const [payingId, setPayingId] = useState<string | null>(null);
   const [verifyingPayment, setVerifyingPayment] = useState(false);
+  const [momoPaymentContribution, setMomoPaymentContribution] =
+    useState<Contribution | null>(null);
 
   const [filter, setFilter] = useState<'ALL' | 'PENDING' | 'PAID' | 'FAILED'>(
     'ALL'
   );
   const [searchTerm, setSearchTerm] = useState('');
   const [message, setMessage] = useState<{
-    type: 'success' | 'error';
+    type: 'success' | 'error' | 'info';
     text: string;
   } | null>(null);
 
@@ -438,435 +437,447 @@ export default function AgentFundSpaceContributionsPage() {
     });
   }, [contributions, searchTerm]);
 
-  async function handlePayWeeklyContribution(contribution: Contribution) {
-    try {
-      setPayingId(contribution.id);
-      setMessage(null);
+  function handleOnlinePaymentComingSoon() {
+    const text =
+      'Online payment will be available soon. For now, please use Pay with MoMo and submit the transaction reference for verification.';
 
-      if (!canPayContribution(contribution)) {
-        throw new Error('This weekly contribution is not payable right now.');
-      }
+    setMessage({
+      type: 'info',
+      text,
+    });
 
-      const token = await getAccessToken();
-
-      const response = await fetch(
-        '/api/payments/agent-customer-contribution/initiate',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            contribution_id: contribution.id,
-            momo_number: contribution.customer?.phone,
-          }),
-        }
-      );
-
-      const result = (await response.json()) as ContributionPaymentResponse;
-
-      if (!response.ok || !result.success) {
-        throw new Error(
-          result.message || 'Could not start weekly contribution payment.'
-        );
-      }
-
-      if (!result.authorization_url) {
-        throw new Error('Payment checkout URL was not returned.');
-      }
-
-      toast({
-        title: result.existing_payment
-          ? 'Continuing pending payment'
-          : 'Weekly contribution payment started',
-        description:
-          result.message ||
-          'Redirecting to Paystack Mobile Money checkout for weekly contribution payment.',
-      });
-
-      window.location.href = result.authorization_url;
-    } catch (error) {
-      const text =
-        error instanceof Error
-          ? error.message
-          : 'Something went wrong while starting contribution payment.';
-
-      setMessage({
-        type: 'error',
-        text,
-      });
-
-      toast({
-        title: 'Contribution payment failed',
-        description: text,
-        variant: 'destructive',
-      });
-    } finally {
-      setPayingId(null);
-    }
+    toast({
+      title: 'Online payment coming soon',
+      description: text,
+    });
   }
 
+  const handleMomoPaymentSubmitted = async () => {
+    setMomoPaymentContribution(null);
+
+    setMessage({
+      type: 'success',
+      text:
+        'MoMo payment reference submitted successfully. Admin will verify the transaction before the contribution is marked as paid.',
+    });
+
+    toast({
+      title: 'MoMo payment submitted',
+      description:
+        'The transaction reference has been sent for admin verification.',
+    });
+
+    await loadContributions();
+  };
+
   return (
-    <div className="space-y-8">
-      <Link
-        href="/agent/fund-space"
-        className="inline-flex items-center gap-2 text-sm font-bold text-emerald-700 hover:text-emerald-800"
-      >
-        <ArrowLeft size={16} />
-        Back to Agent Fund Space
-      </Link>
-
-      <div className="rounded-3xl bg-gradient-to-r from-emerald-700 via-emerald-600 to-teal-600 p-6 text-white shadow-sm md:p-8">
-        <div className="flex flex-col justify-between gap-6 lg:flex-row lg:items-center">
-          <div className="max-w-3xl">
-            <p className="mb-3 inline-flex rounded-full bg-white/15 px-4 py-1 text-sm font-medium">
-              Fund Space Contribution Payments
-            </p>
-
-            <h1 className="text-3xl font-bold md:text-4xl">
-              Customer weekly contributions
-            </h1>
-
-            <p className="mt-4 max-w-2xl text-sm leading-7 text-emerald-50 md:text-base">
-              Use this page only when a customer needs to pay their weekly Fund
-              Space contribution. For wallet top-ups, use Customer Wallet
-              Deposit instead.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={loadContributions}
-            disabled={loading || verifyingPayment}
-            className="inline-flex min-h-12 w-fit items-center justify-center gap-2 rounded-xl bg-white/15 px-5 py-3 text-sm font-bold text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {loading ? (
-              <Loader2 size={16} className="animate-spin" />
-            ) : (
-              <RefreshCw size={16} />
-            )}
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="rounded-3xl border border-amber-100 bg-amber-50 p-5">
-          <div className="flex gap-3">
-            <CreditCard className="mt-1 h-6 w-6 shrink-0 text-amber-700" />
-            <div>
-              <h2 className="font-black text-amber-900">
-                Weekly Contribution Payment
-              </h2>
-              <p className="mt-1 text-sm leading-6 text-amber-700">
-                Use this when the customer says: “I want to pay my weekly Fund
-                Space contribution.”
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-emerald-100 bg-emerald-50 p-5">
-          <div className="flex gap-3">
-            <Wallet className="mt-1 h-6 w-6 shrink-0 text-emerald-700" />
-            <div>
-              <h2 className="font-black text-emerald-900">
-                Not Wallet Deposit
-              </h2>
-              <p className="mt-1 text-sm leading-6 text-emerald-700">
-                If the customer wants to add money to their wallet, use the
-                Customer Wallet Deposit page instead.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {message && (
-        <div
-          className={`flex items-start gap-3 rounded-2xl border p-4 text-sm font-semibold ${
-            message.type === 'success'
-              ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
-              : 'border-red-100 bg-red-50 text-red-700'
-          }`}
+    <>
+      <div className="space-y-8">
+        <Link
+          href="/agent/fund-space"
+          className="inline-flex items-center gap-2 text-sm font-bold text-emerald-700 hover:text-emerald-800"
         >
-          {message.type === 'success' ? (
-            <CheckCircle2 className="mt-0.5 h-5 w-5 flex-none" />
-          ) : (
-            <AlertCircle className="mt-0.5 h-5 w-5 flex-none" />
-          )}
-          <p>{message.text}</p>
-        </div>
-      )}
+          <ArrowLeft size={16} />
+          Back to Agent Fund Space
+        </Link>
 
-      {verifyingPayment && (
-        <div className="flex items-start gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm font-semibold text-emerald-700">
-          <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin" />
-          <span>
-            Verifying weekly contribution payment before updating the Fund Space
-            contribution record.
-          </span>
-        </div>
-      )}
+        <div className="rounded-3xl bg-gradient-to-r from-emerald-700 via-emerald-600 to-teal-600 p-6 text-white shadow-sm md:p-8">
+          <div className="flex flex-col justify-between gap-6 lg:flex-row lg:items-center">
+            <div className="max-w-3xl">
+              <p className="mb-3 inline-flex rounded-full bg-white/15 px-4 py-1 text-sm font-medium">
+                Fund Space Weekly Contributions
+              </p>
 
-      <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-5">
-        <StatCard
-          title="Total Records"
-          value={summary.total_contributions}
-          description="All contribution records"
-          icon={<Wallet className="h-5 w-5" />}
-        />
-        <StatCard
-          title="Contribution Due"
-          value={summary.pending_contributions}
-          description="Waiting for weekly payment"
-          icon={<Clock className="h-5 w-5" />}
-        />
-        <StatCard
-          title="Paid"
-          value={summary.paid_contributions}
-          description="Verified payments"
-          icon={<CheckCircle2 className="h-5 w-5" />}
-        />
-        <StatCard
-          title="Amount Due"
-          value={formatCurrency(summary.total_amount_due)}
-          description="Expected weekly collection"
-          icon={<CircleDollarSign className="h-5 w-5" />}
-        />
-        <StatCard
-          title="Amount Paid"
-          value={formatCurrency(summary.total_amount_paid)}
-          description="Confirmed weekly collection"
-          icon={<CheckCircle2 className="h-5 w-5" />}
-        />
-      </section>
+              <h1 className="text-3xl font-bold md:text-4xl">
+                Customer weekly contributions
+              </h1>
 
-      <section className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="relative w-full lg:max-w-md">
-            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-            <input
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  loadContributions();
-                }
-              }}
-              placeholder="Search customer, phone, group, round, reference..."
-              className="w-full rounded-2xl border border-gray-200 bg-gray-50 py-3 pl-11 pr-4 text-sm outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-50"
-            />
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            {(['ALL', 'PENDING', 'PAID', 'FAILED'] as const).map((item) => (
-              <button
-                key={item}
-                type="button"
-                onClick={() => setFilter(item)}
-                className={`rounded-xl px-4 py-2.5 text-sm font-bold transition ${
-                  filter === item
-                    ? 'bg-emerald-600 text-white shadow-sm hover:bg-emerald-700'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                {item === 'ALL'
-                  ? 'All'
-                  : item === 'PENDING'
-                    ? 'Contribution Due'
-                    : item === 'PAID'
-                      ? 'Paid'
-                      : 'Failed'}
-              </button>
-            ))}
+              <p className="mt-4 max-w-2xl text-sm leading-7 text-emerald-50 md:text-base">
+                Use this page to help assigned customers complete their weekly
+                Fund Space contribution. The customer pays to the TrustPoint MoMo
+                account, then you submit the transaction reference for admin
+                verification.
+              </p>
+            </div>
 
             <button
               type="button"
               onClick={loadContributions}
-              className="rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-bold text-gray-700 transition hover:bg-gray-50"
+              disabled={loading || verifyingPayment}
+              className="inline-flex min-h-12 w-fit items-center justify-center gap-2 rounded-xl bg-white/15 px-5 py-3 text-sm font-bold text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Search
+              {loading ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <RefreshCw size={16} />
+              )}
+              Refresh
             </button>
           </div>
         </div>
-      </section>
 
-      <section className="rounded-3xl border border-gray-100 bg-white shadow-sm">
-        {loading ? (
-          <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 p-8 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50">
-              <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+        <div className="grid gap-4 md:grid-cols-3">
+          <div className="rounded-3xl border border-emerald-100 bg-emerald-50 p-5">
+            <div className="flex gap-3">
+              <Smartphone className="mt-1 h-6 w-6 shrink-0 text-emerald-700" />
+              <div>
+                <h2 className="font-black text-emerald-900">
+                  Pay with MoMo
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-emerald-700">
+                  Customer pays to the TrustPoint MoMo account, then the
+                  transaction reference is submitted for admin verification.
+                </p>
+              </div>
             </div>
-            <p className="text-sm font-medium text-gray-500">
-              Loading customer contributions...
-            </p>
           </div>
-        ) : visibleContributions.length === 0 ? (
-          <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 p-8 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-gray-50">
-              <Wallet className="h-8 w-8 text-gray-400" />
+
+          <div className="rounded-3xl border border-amber-100 bg-amber-50 p-5">
+            <div className="flex gap-3">
+              <CreditCard className="mt-1 h-6 w-6 shrink-0 text-amber-700" />
+              <div>
+                <h2 className="font-black text-amber-900">
+                  Online Payment Coming Soon
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-amber-700">
+                  Online checkout is temporarily disabled while TrustPoint focuses
+                  on verified MoMo contribution payments.
+                </p>
+              </div>
             </div>
-            <h2 className="text-lg font-bold text-gray-900">
-              No contribution records found
-            </h2>
-            <p className="max-w-md text-sm leading-6 text-gray-500">
-              Weekly contribution records will appear here when Fund Space
-              rounds are generated for your assigned customers.
-            </p>
           </div>
-        ) : (
-          <div className="divide-y divide-gray-100">
-            {visibleContributions.map((contribution) => {
-              const customer = contribution.customer;
-              const fundSpace = contribution.fund_space;
-              const round = contribution.round;
-              const remaining = getAmountRemaining(contribution);
-              const payable = canPayContribution(contribution);
-              const isPaying = payingId === contribution.id;
 
-              return (
-                <div key={contribution.id} className="p-5 md:p-6">
-                  <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-xl font-bold text-gray-900">
-                          {customer?.full_name || 'Unknown customer'}
-                        </h3>
+          <div className="rounded-3xl border border-gray-100 bg-gray-50 p-5">
+            <div className="flex gap-3">
+              <FileCheck2 className="mt-1 h-6 w-6 shrink-0 text-gray-700" />
+              <div>
+                <h2 className="font-black text-gray-900">
+                  Admin Verification
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-gray-600">
+                  Contributions are marked as paid only after admin confirms the
+                  transaction from the TrustPoint merchant MoMo statement.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
 
-                        <span
-                          className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                            contribution.status
-                          )}`}
-                        >
-                          {formatLabel(contribution.status)}
-                        </span>
-
-                        {round && (
-                          <span className="rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
-                            Round {round.round_number}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="mt-4 grid gap-3 text-sm text-gray-600 sm:grid-cols-2 lg:grid-cols-4">
-                        <div className="rounded-2xl bg-gray-50 p-4">
-                          <p className="text-xs font-semibold uppercase text-gray-400">
-                            Phone
-                          </p>
-                          <p className="mt-1 font-bold text-gray-800">
-                            {customer?.phone || 'Not provided'}
-                          </p>
-                        </div>
-
-                        <div className="rounded-2xl bg-gray-50 p-4">
-                          <p className="text-xs font-semibold uppercase text-gray-400">
-                            Amount Due
-                          </p>
-                          <p className="mt-1 font-bold text-gray-800">
-                            {formatCurrency(contribution.amount_due)}
-                          </p>
-                        </div>
-
-                        <div className="rounded-2xl bg-gray-50 p-4">
-                          <p className="text-xs font-semibold uppercase text-gray-400">
-                            Amount Paid
-                          </p>
-                          <p className="mt-1 font-bold text-gray-800">
-                            {formatCurrency(contribution.amount_paid)}
-                          </p>
-                        </div>
-
-                        <div className="rounded-2xl bg-gray-50 p-4">
-                          <p className="text-xs font-semibold uppercase text-gray-400">
-                            Remaining
-                          </p>
-                          <p className="mt-1 font-bold text-gray-800">
-                            {formatCurrency(remaining)}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="mt-4 rounded-2xl bg-gray-50 p-4 text-sm text-gray-600">
-                        <p>
-                          <span className="font-bold text-gray-800">
-                            Fund Space:
-                          </span>{' '}
-                          {fundSpace?.name || 'Not available'}
-                        </p>
-                        <p className="mt-1">
-                          <span className="font-bold text-gray-800">
-                            Deadline:
-                          </span>{' '}
-                          {formatDate(round?.contribution_deadline)}
-                        </p>
-                        <p className="mt-1">
-                          <span className="font-bold text-gray-800">
-                            Payment Ref:
-                          </span>{' '}
-                          {contribution.payment_reference || 'Not paid yet'}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="w-full rounded-3xl border border-gray-100 bg-gray-50 p-5 xl:w-[360px]">
-                      <div className="flex items-center gap-3">
-                        <div className="rounded-2xl bg-amber-50 p-3 text-amber-700">
-                          <UserRound className="h-5 w-5" />
-                        </div>
-
-                        <div>
-                          <p className="text-sm font-bold text-gray-900">
-                            Weekly Contribution Action
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            Pay contribution due
-                          </p>
-                        </div>
-                      </div>
-
-                      {payable ? (
-                        <button
-                          type="button"
-                          disabled={isPaying || verifyingPayment}
-                          onClick={() =>
-                            handlePayWeeklyContribution(contribution)
-                          }
-                          className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-amber-600 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-gray-300"
-                        >
-                          {isPaying ? (
-                            <>
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                              Starting Payment...
-                            </>
-                          ) : (
-                            <>
-                              <Smartphone size={16} />
-                              Pay Weekly Contribution
-                            </>
-                          )}
-                        </button>
-                      ) : (
-                        <div className="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm font-semibold text-emerald-700">
-                          This contribution is already paid or not payable now.
-                        </div>
-                      )}
-
-                      <Link
-                        href={`/agent/fund-space/${contribution.user_id}`}
-                        className="mt-4 inline-flex w-full items-center justify-center rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-bold text-gray-700 transition hover:bg-gray-50"
-                      >
-                        View Customer Fund Space
-                      </Link>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+        {message && (
+          <div
+            className={`flex items-start gap-3 rounded-2xl border p-4 text-sm font-semibold ${
+              message.type === 'success'
+                ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
+                : message.type === 'info'
+                  ? 'border-blue-100 bg-blue-50 text-blue-700'
+                  : 'border-red-100 bg-red-50 text-red-700'
+            }`}
+          >
+            {message.type === 'success' ? (
+              <CheckCircle2 className="mt-0.5 h-5 w-5 flex-none" />
+            ) : message.type === 'info' ? (
+              <Info className="mt-0.5 h-5 w-5 flex-none" />
+            ) : (
+              <AlertCircle className="mt-0.5 h-5 w-5 flex-none" />
+            )}
+            <p>{message.text}</p>
           </div>
         )}
-      </section>
-    </div>
+
+        {verifyingPayment && (
+          <div className="flex items-start gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm font-semibold text-emerald-700">
+            <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin" />
+            <span>
+              Verifying weekly contribution payment before updating the Fund
+              Space contribution record.
+            </span>
+          </div>
+        )}
+
+        <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-5">
+          <StatCard
+            title="Total Records"
+            value={summary.total_contributions}
+            description="All contribution records"
+            icon={<Wallet className="h-5 w-5" />}
+          />
+          <StatCard
+            title="Contribution Due"
+            value={summary.pending_contributions}
+            description="Waiting for weekly payment"
+            icon={<Clock className="h-5 w-5" />}
+          />
+          <StatCard
+            title="Paid"
+            value={summary.paid_contributions}
+            description="Verified payments"
+            icon={<CheckCircle2 className="h-5 w-5" />}
+          />
+          <StatCard
+            title="Amount Due"
+            value={formatCurrency(summary.total_amount_due)}
+            description="Expected weekly collection"
+            icon={<CircleDollarSign className="h-5 w-5" />}
+          />
+          <StatCard
+            title="Amount Paid"
+            value={formatCurrency(summary.total_amount_paid)}
+            description="Confirmed weekly collection"
+            icon={<CheckCircle2 className="h-5 w-5" />}
+          />
+        </section>
+
+        <section className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="relative w-full lg:max-w-md">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <input
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    loadContributions();
+                  }
+                }}
+                placeholder="Search customer, phone, group, round, reference..."
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 py-3 pl-11 pr-4 text-sm outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-50"
+              />
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {(['ALL', 'PENDING', 'PAID', 'FAILED'] as const).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setFilter(item)}
+                  className={`rounded-xl px-4 py-2.5 text-sm font-bold transition ${
+                    filter === item
+                      ? 'bg-emerald-600 text-white shadow-sm hover:bg-emerald-700'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  {item === 'ALL'
+                    ? 'All'
+                    : item === 'PENDING'
+                      ? 'Contribution Due'
+                      : item === 'PAID'
+                        ? 'Paid'
+                        : 'Failed'}
+                </button>
+              ))}
+
+              <button
+                type="button"
+                onClick={loadContributions}
+                className="rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-bold text-gray-700 transition hover:bg-gray-50"
+              >
+                Search
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-gray-100 bg-white shadow-sm">
+          {loading ? (
+            <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 p-8 text-center">
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50">
+                <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+              </div>
+              <p className="text-sm font-medium text-gray-500">
+                Loading customer contributions...
+              </p>
+            </div>
+          ) : visibleContributions.length === 0 ? (
+            <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 p-8 text-center">
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-gray-50">
+                <Wallet className="h-8 w-8 text-gray-400" />
+              </div>
+              <h2 className="text-lg font-bold text-gray-900">
+                No contribution records found
+              </h2>
+              <p className="max-w-md text-sm leading-6 text-gray-500">
+                Weekly contribution records will appear here when Fund Space
+                rounds are generated for your assigned customers.
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {visibleContributions.map((contribution) => {
+                const customer = contribution.customer;
+                const fundSpace = contribution.fund_space;
+                const round = contribution.round;
+                const remaining = getAmountRemaining(contribution);
+                const payable = canPayContribution(contribution);
+
+                return (
+                  <div key={contribution.id} className="p-5 md:p-6">
+                    <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-xl font-bold text-gray-900">
+                            {customer?.full_name || 'Unknown customer'}
+                          </h3>
+
+                          <span
+                            className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
+                              contribution.status
+                            )}`}
+                          >
+                            {formatLabel(contribution.status)}
+                          </span>
+
+                          {round && (
+                            <span className="rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
+                              Round {round.round_number}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="mt-4 grid gap-3 text-sm text-gray-600 sm:grid-cols-2 lg:grid-cols-4">
+                          <div className="rounded-2xl bg-gray-50 p-4">
+                            <p className="text-xs font-semibold uppercase text-gray-400">
+                              Phone
+                            </p>
+                            <p className="mt-1 font-bold text-gray-800">
+                              {customer?.phone || 'Not provided'}
+                            </p>
+                          </div>
+
+                          <div className="rounded-2xl bg-gray-50 p-4">
+                            <p className="text-xs font-semibold uppercase text-gray-400">
+                              Amount Due
+                            </p>
+                            <p className="mt-1 font-bold text-gray-800">
+                              {formatCurrency(contribution.amount_due)}
+                            </p>
+                          </div>
+
+                          <div className="rounded-2xl bg-gray-50 p-4">
+                            <p className="text-xs font-semibold uppercase text-gray-400">
+                              Amount Paid
+                            </p>
+                            <p className="mt-1 font-bold text-gray-800">
+                              {formatCurrency(contribution.amount_paid)}
+                            </p>
+                          </div>
+
+                          <div className="rounded-2xl bg-gray-50 p-4">
+                            <p className="text-xs font-semibold uppercase text-gray-400">
+                              Remaining
+                            </p>
+                            <p className="mt-1 font-bold text-gray-800">
+                              {formatCurrency(remaining)}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 rounded-2xl bg-gray-50 p-4 text-sm text-gray-600">
+                          <p>
+                            <span className="font-bold text-gray-800">
+                              Fund Space:
+                            </span>{' '}
+                            {fundSpace?.name || 'Not available'}
+                          </p>
+                          <p className="mt-1">
+                            <span className="font-bold text-gray-800">
+                              Deadline:
+                            </span>{' '}
+                            {formatDate(round?.contribution_deadline)}
+                          </p>
+                          <p className="mt-1">
+                            <span className="font-bold text-gray-800">
+                              Payment Ref:
+                            </span>{' '}
+                            {contribution.payment_reference || 'Not paid yet'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="w-full rounded-3xl border border-gray-100 bg-gray-50 p-5 xl:w-[380px]">
+                        <div className="flex items-center gap-3">
+                          <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-700">
+                            <UserRound className="h-5 w-5" />
+                          </div>
+
+                          <div>
+                            <p className="text-sm font-bold text-gray-900">
+                              Weekly Contribution Action
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              Use MoMo verification for now
+                            </p>
+                          </div>
+                        </div>
+
+                        {payable ? (
+                          <div className="mt-5 grid gap-3">
+                            <button
+                              type="button"
+                              disabled={verifyingPayment}
+                              onClick={() =>
+                                setMomoPaymentContribution(contribution)
+                              }
+                              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+                            >
+                              <Smartphone size={16} />
+                              Pay with MoMo
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled
+                              title="Online payment will be available soon. Please use Pay with MoMo for now."
+                              onClick={handleOnlinePaymentComingSoon}
+                              className="group relative inline-flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl border border-gray-200 bg-gray-100 px-5 py-3 text-sm font-bold text-gray-400 shadow-sm"
+                            >
+                              <CreditCard size={16} />
+                              Pay Online
+
+                              <span className="pointer-events-none absolute -top-12 left-1/2 hidden w-72 -translate-x-1/2 rounded-xl bg-gray-900 px-3 py-2 text-xs font-semibold leading-5 text-white shadow-lg group-hover:block">
+                                Online payment will be available soon. Use Pay
+                                with MoMo for now.
+                              </span>
+                            </button>
+
+                            <p className="text-xs leading-5 text-gray-500">
+                              The customer pays to the TrustPoint MoMo account.
+                              After submission, admin verifies the transaction
+                              before marking the contribution as paid.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm font-semibold text-emerald-700">
+                            This contribution is already paid or not payable now.
+                          </div>
+                        )}
+
+                        <Link
+                          href={`/agent/fund-space/${contribution.user_id}`}
+                          className="mt-4 inline-flex w-full items-center justify-center rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-bold text-gray-700 transition hover:bg-gray-50"
+                        >
+                          View Customer Fund Space
+                        </Link>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      </div>
+
+      {momoPaymentContribution && (
+        <ManualMerchantPaymentModal
+          open={Boolean(momoPaymentContribution)}
+          onClose={() => setMomoPaymentContribution(null)}
+          onSubmitted={handleMomoPaymentSubmitted}
+          contributionId={momoPaymentContribution.id}
+          customerName={momoPaymentContribution.customer?.full_name}
+          amountDue={getAmountRemaining(momoPaymentContribution)}
+          title="Complete Customer MoMo Payment"
+        />
+      )}
+    </>
   );
 }

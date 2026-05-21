@@ -10,9 +10,11 @@ import {
   CheckCircle2,
   CircleDollarSign,
   Clock,
+  CreditCard,
   Loader2,
   RefreshCw,
   ShieldCheck,
+  Smartphone,
   Trophy,
   Users,
   Wallet,
@@ -614,6 +616,48 @@ export default function FundSpacePage() {
               />
             </div>
 
+            {fundSpace.status === 'ACTIVE' && (
+              <div className="mt-8 rounded-3xl border border-emerald-100 bg-emerald-50 p-6">
+                <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-center">
+                  <div className="flex items-start gap-3">
+                    <div className="rounded-2xl bg-white p-3 text-emerald-700 shadow-sm">
+                      <Smartphone className="h-6 w-6" />
+                    </div>
+
+                    <div>
+                      <h3 className="text-xl font-black text-emerald-900">
+                        Weekly Contribution
+                      </h3>
+
+                      <p className="mt-2 max-w-2xl text-sm leading-6 text-emerald-700">
+                        Your group is active. Open your contribution page to pay
+                        with MoMo, submit your transaction reference, or continue
+                        with online payment.
+                      </p>
+
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <span className="rounded-full border border-emerald-100 bg-white px-3 py-1 text-xs font-bold text-emerald-700">
+                          Amount: {formatCurrency(fundSpace.contribution_amount)}
+                        </span>
+
+                        <span className="rounded-full border border-emerald-100 bg-white px-3 py-1 text-xs font-bold text-emerald-700">
+                          Round: {fundSpace.current_round_number || 0}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <Link
+                    href={`/dashboard/fund-space/${fundSpace.id}`}
+                    className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-5 py-3 text-sm font-bold text-white hover:bg-emerald-800"
+                  >
+                    Pay Contribution
+                    <ArrowRight size={16} />
+                  </Link>
+                </div>
+              </div>
+            )}
+
             {myPayoutRound && (
               <div className="mt-8 rounded-2xl border border-emerald-100 bg-emerald-50 p-5">
                 <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
@@ -709,6 +753,25 @@ export default function FundSpacePage() {
               description="The system-generated payout order keeps the group transparent."
             />
           </div>
+
+          <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
+            <div className="flex items-start gap-3">
+              <CreditCard className="mt-1 h-6 w-6 shrink-0 text-emerald-600" />
+
+              <div>
+                <h2 className="text-xl font-black text-gray-900">
+                  How contribution payment works
+                </h2>
+
+                <p className="mt-2 text-sm leading-6 text-gray-500">
+                  You can pay with MoMo through the TrustPoint merchant line and
+                  submit your transaction reference for verification. Once admin
+                  confirms your transaction, your contribution will be marked as
+                  paid.
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -776,12 +839,12 @@ function GuideCard({
   description: string;
 }) {
   return (
-    <div className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm">
+    <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
       <div className="mb-4 inline-flex rounded-2xl bg-emerald-50 p-3 text-emerald-700">
         {icon}
       </div>
 
-      <h3 className="font-black text-gray-900">{title}</h3>
+      <h3 className="text-lg font-black text-gray-900">{title}</h3>
 
       <p className="mt-2 text-sm leading-6 text-gray-500">{description}</p>
     </div>

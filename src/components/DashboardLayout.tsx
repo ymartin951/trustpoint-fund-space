@@ -22,15 +22,16 @@ import {
   Bell,
   ChevronDown,
   CircleHelp,
+  ClipboardCheck,
   CreditCard,
   HandCoins,
   LayoutDashboard,
   Loader2,
   LogOut,
   Menu,
-  PiggyBank,
   Settings,
   Shield,
+  Smartphone,
   User,
   UserCog,
   UserPlus,
@@ -102,43 +103,37 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
       href: '/admin/fund-space',
       label: 'Fund Space Management',
       icon: WalletCards,
-      description: 'Manage Fund Space groups',
+      description: 'Manage contribution groups',
     },
     {
       href: '/admin/fund-space/contributions',
-      label: 'Fund Space Contributions',
+      label: 'Weekly Contributions',
       icon: HandCoins,
-      description: 'Track weekly contributions',
+      description: 'Track member contributions',
+    },
+    {
+      href: '/admin/manual-payment-submissions',
+      label: 'MoMo Verification',
+      icon: Smartphone,
+      description: 'Approve MoMo payment references',
     },
     {
       href: '/admin/fund-space/payouts',
       label: 'Payout Approvals',
       icon: Banknote,
-      description: 'Approve and pay payouts',
+      description: 'Approve and record payouts',
     },
     {
       href: '/admin/users',
-      label: 'All Users',
+      label: 'Members',
       icon: User,
-      description: 'Manage members',
+      description: 'Manage member accounts',
     },
     {
       href: '/admin/agents',
       label: 'Agents',
       icon: Users,
-      description: 'Manage agents',
-    },
-    {
-      href: '/admin/transactions',
-      label: 'All Transactions',
-      icon: CreditCard,
-      description: 'Confirmed money movement',
-    },
-    {
-      href: '/admin/withdrawals',
-      label: 'Withdrawal Requests',
-      icon: Wallet,
-      description: 'Review user withdrawals',
+      description: 'Manage field agents',
     },
     {
       href: '/admin/notifications',
@@ -158,7 +153,7 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
     {
       href: '/admin/audit-logs',
       label: 'Audit Logs',
-      icon: Settings,
+      icon: ClipboardCheck,
       description: 'System activity history',
     },
   ];
@@ -180,13 +175,7 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
       href: '/agent/fund-space/contributions',
       label: 'Weekly Contributions',
       icon: HandCoins,
-      description: 'Help customers pay weekly contributions',
-    },
-    {
-      href: '/agent/deposits',
-      label: 'Customer Wallet Deposits',
-      icon: Wallet,
-      description: 'Help customers add money to wallet',
+      description: 'Help customers pay weekly',
     },
     {
       href: '/agent/customers',
@@ -219,37 +208,19 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
       href: '/dashboard/fund-space',
       label: 'My Fund Space',
       icon: Users,
-      description: 'Your joined groups',
-    },
-    {
-      href: '/dashboard/deposit',
-      label: 'My Wallet',
-      icon: Wallet,
-      description: 'Wallet deposit and balance',
+      description: 'Groups and weekly payments',
     },
     {
       href: '/dashboard/transactions',
-      label: 'My Transactions',
+      label: 'Payment Records',
       icon: CreditCard,
-      description: 'Personal transaction records',
+      description: 'Contribution payment history',
     },
     {
-      href: '/dashboard/withdrawals',
-      label: 'My Withdrawals',
-      icon: Banknote,
-      description: 'Personal withdrawal requests',
-    },
-    {
-      href: '/dashboard/savings',
-      label: 'My Savings Plans',
-      icon: PiggyBank,
-      description: 'Personal savings',
-    },
-    {
-      href: '/dashboard/groups',
-      label: 'My Groups',
-      icon: Users,
-      description: 'Your groups',
+      href: '/dashboard/notifications',
+      label: 'Notifications',
+      icon: Bell,
+      description: 'Contribution alerts',
     },
   ];
 
@@ -264,25 +235,19 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
       href: '/dashboard/fund-space',
       label: 'My Fund Space',
       icon: Users,
-      description: 'Your joined groups',
-    },
-    {
-      href: '/dashboard/deposit',
-      label: 'My Wallet',
-      icon: Wallet,
-      description: 'Wallet deposit and balance',
+      description: 'Groups and weekly payments',
     },
     {
       href: '/dashboard/transactions',
-      label: 'My Transactions',
+      label: 'Payment Records',
       icon: CreditCard,
-      description: 'Your personal records',
+      description: 'Contribution payment history',
     },
     {
-      href: '/dashboard/withdrawals',
-      label: 'My Withdrawals',
-      icon: Banknote,
-      description: 'Your personal withdrawals',
+      href: '/dashboard/notifications',
+      label: 'Notifications',
+      icon: Bell,
+      description: 'Contribution alerts',
     },
   ];
 
@@ -373,8 +338,12 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
   };
 
   const getDashboardTitle = () => {
+    if (pathname.startsWith('/admin/manual-payment-submissions')) {
+      return 'MoMo Payment Verification';
+    }
+
     if (pathname.startsWith('/admin/fund-space/contributions')) {
-      return 'Fund Space Contributions';
+      return 'Weekly Contributions';
     }
 
     if (pathname.startsWith('/admin/fund-space/payouts')) {
@@ -386,10 +355,8 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
     }
 
     if (pathname.startsWith('/admin/verifications')) return 'Verifications';
-    if (pathname.startsWith('/admin/users')) return 'All Users';
+    if (pathname.startsWith('/admin/users')) return 'Members';
     if (pathname.startsWith('/admin/agents')) return 'Agents';
-    if (pathname.startsWith('/admin/transactions')) return 'All Transactions';
-    if (pathname.startsWith('/admin/withdrawals')) return 'Withdrawal Requests';
     if (pathname.startsWith('/admin/notifications')) return 'Admin Notifications';
     if (pathname.startsWith('/admin/settings/auth')) return 'Audit Settings';
     if (pathname.startsWith('/admin/audit-logs')) return 'Audit Logs';
@@ -403,18 +370,13 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
       return 'Customer Fund Space';
     }
 
-    if (pathname.startsWith('/agent/deposits')) return 'Customer Wallet Deposits';
     if (pathname.startsWith('/agent/customers')) return 'Customers';
     if (pathname.startsWith('/agent/register-customer')) return 'Register Customer';
     if (pathname.startsWith('/agent/notifications')) return 'Agent Notifications';
     if (pathname.startsWith('/agent')) return 'Agent Dashboard';
 
     if (pathname.startsWith('/dashboard/fund-space')) return 'My Fund Space';
-    if (pathname.startsWith('/dashboard/deposit')) return 'My Wallet';
-    if (pathname.startsWith('/dashboard/transactions')) return 'My Transactions';
-    if (pathname.startsWith('/dashboard/withdrawals')) return 'My Withdrawals';
-    if (pathname.startsWith('/dashboard/savings')) return 'My Savings Plans';
-    if (pathname.startsWith('/dashboard/groups')) return 'My Groups';
+    if (pathname.startsWith('/dashboard/transactions')) return 'Payment Records';
     if (pathname.startsWith('/dashboard/profile')) return 'Profile Settings';
     if (pathname.startsWith('/dashboard/notifications')) return 'My Notifications';
     if (pathname.startsWith('/dashboard')) return 'My Dashboard';
@@ -763,7 +725,7 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
                       <div>
                         <p className="font-medium">Help & Support</p>
                         <p className="text-xs text-slate-500">
-                          Get help with your account
+                          Get help with weekly contributions
                         </p>
                       </div>
                     </DropdownMenuItem>
@@ -814,7 +776,8 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
 function SearchPlaceholder() {
   return (
     <span className="text-sm">
-      Search members, Fund Spaces, wallets, contributions, transactions...
+      Search Fund Spaces, weekly contributions, members, agents, and payment
+      records...
     </span>
   );
 }
