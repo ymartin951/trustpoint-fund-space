@@ -228,15 +228,15 @@ export async function POST(
       return authResult.response;
     }
 
-    if (!isFridayInGhana()) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: `Payout approvals are only allowed on Fridays. Today is ${getGhanaWeekday()} in Ghana.`,
-        },
-        { status: 403 }
-      );
-    }
+    // if (!isFridayInGhana()) {
+    //   return NextResponse.json(
+    //     {
+    //       success: false,
+    //       message: `Payout approvals are only allowed on Fridays. Today is ${getGhanaWeekday()} in Ghana.`,
+    //     },
+    //     { status: 403 }
+    //   );
+    // }
 
     const payoutId = params.payoutId;
 
