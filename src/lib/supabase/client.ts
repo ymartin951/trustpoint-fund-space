@@ -14,4 +14,25 @@ if (!supabaseAnonKey) {
   throw new Error('Missing NEXT_PUBLIC_SUPABASE_ANON_KEY');
 }
 
-export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey);
+declare global {
+  // eslint-disable-next-line no-var
+  var __trustPointSupabaseClient:
+    | ReturnType<typeof createClient<Database>>
+    | undefined;
+}
+
+export const supabase =
+  globalThis.__trustPointSupabaseClient ??
+  createClient<Database>(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      flowType: 'pkce',
+      storageKey: 'trustpoint-fund-space-auth',
+    },
+  });
+
+if (process.env.NODE_ENV !== 'production') {
+  globalThis.__trustPointSupabaseClient = supabase;
+}

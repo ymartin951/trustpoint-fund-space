@@ -13,9 +13,11 @@ import {
   AlertCircle,
   ArrowLeft,
   BadgeCheck,
+  CheckCircle2,
   CircleDollarSign,
   Clock,
   CreditCard,
+  Info,
   Loader2,
   RefreshCw,
   Smartphone,
@@ -129,6 +131,20 @@ type PaymentTransaction = {
   created_at: string | null;
 };
 
+type ManualPaymentSubmission = {
+  id: string;
+  contribution_id: string;
+  fund_space_id: string;
+  user_id: string;
+  agent_id: string | null;
+  status: string;
+  transaction_reference: string;
+  total_amount_paid: number;
+  rejection_reason: string | null;
+  created_at: string | null;
+  reviewed_at: string | null;
+};
+
 type ContributionPaymentResponse = {
   success?: boolean;
   message?: string;
@@ -203,6 +219,7 @@ function getStatusStyle(status: string | null | undefined) {
       'PROCESSING',
       'FORMING',
       'PENDING_ADMIN_APPROVAL',
+      'PENDING_REVIEW',
       'COLLECTING',
       'READY_FOR_PAYOUT',
       'READY_FOR_ADMIN_APPROVAL',
@@ -261,6 +278,22 @@ function getAmountRemaining(contribution: Contribution | null) {
   );
 }
 
+function sortManualSubmissionsByPriority(
+  submissions: ManualPaymentSubmission[]
+) {
+  return [...submissions].sort((a, b) => {
+    const aPending = a.status === 'PENDING_REVIEW' ? 1 : 0;
+    const bPending = b.status === 'PENDING_REVIEW' ? 1 : 0;
+
+    if (aPending !== bPending) return bPending - aPending;
+
+    const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+
+    return bTime - aTime;
+  });
+}
+
 export default function FundSpaceDetailsPage() {
   const router = useRouter();
   const params = useParams();
@@ -289,6 +322,9 @@ export default function FundSpaceDetailsPage() {
   const [paymentAttempts, setPaymentAttempts] = useState<PaymentTransaction[]>(
     []
   );
+  const [manualPaymentSubmissions, setManualPaymentSubmissions] = useState<
+    ManualPaymentSubmission[]
+  >([]);
   const [errorMessage, setErrorMessage] = useState('');
 
   const loadFundSpace = useCallback(async () => {
@@ -473,6 +509,31 @@ export default function FundSpaceDetailsPage() {
     [fundSpaceId]
   );
 
+  const loadManualPaymentSubmissions = useCallback(
+    async (userId: string) => {
+      const { data, error } = await supabase
+        .from('manual_payment_submissions')
+        .select(
+          'id, contribution_id, fund_space_id, user_id, agent_id, status, transaction_reference, total_amount_paid, rejection_reason, created_at, reviewed_at'
+        )
+        .eq('fund_space_id', fundSpaceId)
+        .eq('user_id', userId)
+        .in('status', ['PENDING_REVIEW', 'REJECTED'])
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.warn('Manual MoMo submissions load warning:', error.message);
+        setManualPaymentSubmissions([]);
+        return;
+      }
+
+      setManualPaymentSubmissions(
+        (data || []) as unknown as ManualPaymentSubmission[]
+      );
+    },
+    [fundSpaceId]
+  );
+
   const loadPage = useCallback(
     async (showRefreshState = false) => {
       try {
@@ -519,6 +580,7 @@ export default function FundSpaceDetailsPage() {
           loadMyContributions(userId),
           loadMyPayouts(userId),
           loadPaymentAttempts(userId),
+          loadManualPaymentSubmissions(userId),
         ]);
       } catch (error: unknown) {
         console.error('Fund Space details load error:', error);
@@ -543,6 +605,7 @@ export default function FundSpaceDetailsPage() {
       loadMyContributions,
       loadMyPayouts,
       loadPaymentAttempts,
+      loadManualPaymentSubmissions,
     ]
   );
 
@@ -737,8 +800,36 @@ export default function FundSpaceDetailsPage() {
     );
   }, [myContributions]);
 
+  const manualSubmissionByContributionId = useMemo(() => {
+    const map = new Map<string, ManualPaymentSubmission>();
+
+    for (const submission of sortManualSubmissionsByPriority(
+      manualPaymentSubmissions
+    )) {
+      if (!map.has(submission.contribution_id)) {
+        map.set(submission.contribution_id, submission);
+      }
+    }
+
+    return map;
+  }, [manualPaymentSubmissions]);
+
   const paymentTargetContribution = currentContribution || myNextContribution;
   const amountRemaining = getAmountRemaining(paymentTargetContribution);
+
+  const manualSubmissionForTarget = paymentTargetContribution
+    ? manualSubmissionByContributionId.get(paymentTargetContribution.id) || null
+    : null;
+
+  const pendingManualSubmissionForTarget =
+    manualSubmissionForTarget?.status === 'PENDING_REVIEW'
+      ? manualSubmissionForTarget
+      : null;
+
+  const rejectedManualSubmissionForTarget =
+    manualSubmissionForTarget?.status === 'REJECTED'
+      ? manualSubmissionForTarget
+      : null;
 
   const pendingPaymentForTarget = useMemo(() => {
     if (!paymentTargetContribution) return null;
@@ -761,6 +852,9 @@ export default function FundSpaceDetailsPage() {
     fundSpace?.status === 'ACTIVE' &&
     !['PAID', 'WAIVED'].includes(paymentTargetContribution?.status || '');
 
+  const canPayWithMomo =
+    canPayContribution && !pendingManualSubmissionForTarget;
+
   const myLatestPayout = myPayouts[0] || null;
 
   const memberCount = members.length;
@@ -781,7 +875,7 @@ export default function FundSpaceDetailsPage() {
     toast({
       title: 'MoMo payment submitted',
       description:
-        'Your transaction reference has been submitted for verification. Your contribution will be updated after admin approval.',
+        'Your transaction reference has been submitted for verification. Pay with MoMo is locked until admin reviews it.',
     });
 
     await loadPage(true);
@@ -947,8 +1041,8 @@ export default function FundSpaceDetailsPage() {
           <div className="flex items-start gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm font-semibold text-emerald-700">
             <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin" />
             <span>
-              Verifying your contribution payment with Paystack before updating
-              your Fund Space record.
+              Verifying your contribution payment before updating your Fund
+              Space record.
             </span>
           </div>
         )}
@@ -1055,7 +1149,7 @@ export default function FundSpaceDetailsPage() {
 
               <p className="mt-1 text-sm text-gray-500">
                 Pay through TrustPoint MoMo and submit your transaction
-                reference for verification, or use the online checkout option.
+                reference for admin verification.
               </p>
 
               {paymentTargetContribution ? (
@@ -1079,6 +1173,40 @@ export default function FundSpaceDetailsPage() {
                 </p>
               )}
 
+              {pendingManualSubmissionForTarget && (
+                <div className="mt-4 flex items-start gap-3 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-700">
+                  <Clock className="mt-0.5 h-5 w-5 shrink-0" />
+                  <div>
+                    <p className="font-black">MoMo payment awaiting verification</p>
+                    <p className="mt-1 leading-6">
+                      Your payment reference has already been submitted for admin
+                      review. You cannot submit another MoMo payment until admin
+                      approves or rejects this request.
+                    </p>
+                    <p className="mt-2 text-xs font-semibold">
+                      Reference: {pendingManualSubmissionForTarget.transaction_reference}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {rejectedManualSubmissionForTarget && !pendingManualSubmissionForTarget && (
+                <div className="mt-4 flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">
+                  <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+                  <div>
+                    <p className="font-black">Previous MoMo payment was rejected</p>
+                    <p className="mt-1 leading-6">
+                      You may submit a corrected MoMo payment reference.
+                    </p>
+                    {rejectedManualSubmissionForTarget.rejection_reason && (
+                      <p className="mt-2 text-xs font-semibold">
+                        Reason: {rejectedManualSubmissionForTarget.rejection_reason}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {pendingPaymentForTarget && (
                 <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-700">
                   <p className="font-bold">Pending online payment found</p>
@@ -1096,38 +1224,34 @@ export default function FundSpaceDetailsPage() {
                 type="button"
                 onClick={() =>
                   paymentTargetContribution &&
+                  canPayWithMomo &&
                   setMomoPaymentContribution(paymentTargetContribution)
                 }
-                disabled={!canPayContribution || verifyingPayment}
+                disabled={!canPayWithMomo || verifyingPayment}
                 className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Smartphone className="h-4 w-4" />
-                Pay with MoMo
+                {pendingManualSubmissionForTarget
+                  ? 'Awaiting Verification'
+                  : 'Pay with MoMo'}
               </button>
 
               <button
                 type="button"
-                onClick={handlePayContribution}
-                disabled={!canPayContribution || payingContribution || verifyingPayment}
-                className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-white px-5 text-sm font-bold text-emerald-700 shadow-sm transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled
+                title="Online payment will be available soon. Please use Pay with MoMo for now."
+                className="inline-flex min-h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-gray-100 px-5 text-sm font-bold text-gray-400 shadow-sm"
               >
-                {payingContribution ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Starting Payment...
-                  </>
-                ) : pendingPaymentForTarget?.checkout_url ? (
-                  <>
-                    <Smartphone className="h-4 w-4" />
-                    Continue Online Payment
-                  </>
-                ) : (
-                  <>
-                    <CreditCard className="h-4 w-4" />
-                    Pay Online
-                  </>
-                )}
+                <CreditCard className="h-4 w-4" />
+                Pay Online
               </button>
+
+              {pendingManualSubmissionForTarget && (
+                <p className="text-xs leading-5 text-amber-700">
+                  Pay with MoMo is locked because this contribution already has a
+                  payment request awaiting admin verification.
+                </p>
+              )}
 
               {!canPayContribution && paymentTargetContribution && (
                 <p className="text-xs leading-5 text-gray-500">
@@ -1504,37 +1628,59 @@ export default function FundSpaceDetailsPage() {
                 </div>
               ) : (
                 <div className="divide-y divide-gray-100">
-                  {myContributions.map((item) => (
-                    <div
-                      key={item.id}
-                      className="flex flex-col justify-between gap-3 p-4 sm:flex-row sm:items-center"
-                    >
-                      <div>
-                        <p className="font-semibold text-gray-900">
-                          Due: {formatCurrency(item.amount_due)}
-                        </p>
+                  {myContributions.map((item) => {
+                    const relatedManualSubmission =
+                      manualSubmissionByContributionId.get(item.id) || null;
 
-                        <p className="text-xs text-gray-500">
-                          Paid: {formatCurrency(item.amount_paid)} • Created:{' '}
-                          {formatDate(item.created_at)}
-                        </p>
-
-                        {item.payment_reference && (
-                          <p className="mt-1 text-xs text-gray-500">
-                            Ref: {item.payment_reference}
-                          </p>
-                        )}
-                      </div>
-
-                      <span
-                        className={`w-fit rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                          item.status
-                        )}`}
+                    return (
+                      <div
+                        key={item.id}
+                        className="flex flex-col justify-between gap-3 p-4 sm:flex-row sm:items-center"
                       >
-                        {formatLabel(item.status)}
-                      </span>
-                    </div>
-                  ))}
+                        <div>
+                          <p className="font-semibold text-gray-900">
+                            Due: {formatCurrency(item.amount_due)}
+                          </p>
+
+                          <p className="text-xs text-gray-500">
+                            Paid: {formatCurrency(item.amount_paid)} • Created:{' '}
+                            {formatDate(item.created_at)}
+                          </p>
+
+                          {item.payment_reference && (
+                            <p className="mt-1 text-xs text-gray-500">
+                              Ref: {item.payment_reference}
+                            </p>
+                          )}
+
+                          {relatedManualSubmission?.status === 'PENDING_REVIEW' && (
+                            <p className="mt-1 text-xs font-semibold text-amber-700">
+                              MoMo reference awaiting admin verification:{' '}
+                              {relatedManualSubmission.transaction_reference}
+                            </p>
+                          )}
+
+                          {relatedManualSubmission?.status === 'REJECTED' && (
+                            <p className="mt-1 text-xs font-semibold text-red-700">
+                              Previous MoMo submission rejected.
+                            </p>
+                          )}
+                        </div>
+
+                        <span
+                          className={`w-fit rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
+                            relatedManualSubmission?.status === 'PENDING_REVIEW'
+                              ? 'PENDING_REVIEW'
+                              : item.status
+                          )}`}
+                        >
+                          {relatedManualSubmission?.status === 'PENDING_REVIEW'
+                            ? 'Awaiting Verification'
+                            : formatLabel(item.status)}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1597,8 +1743,8 @@ export default function FundSpaceDetailsPage() {
           </h2>
 
           <p className="mt-1 text-sm text-gray-500">
-            These are online payment attempts. MoMo transfer submissions are
-            verified separately by admin.
+            Online payment is currently disabled. Use Pay with MoMo for weekly
+            contribution verification.
           </p>
 
           <div className="mt-6 overflow-hidden rounded-2xl border border-gray-100">

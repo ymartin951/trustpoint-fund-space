@@ -85,11 +85,31 @@ type Contribution = {
   round: RoundLite | null;
 };
 
+type ManualPaymentSubmission = {
+  id: string;
+  contribution_id: string;
+  fund_space_id: string;
+  user_id: string;
+  agent_id: string | null;
+  status: string;
+  transaction_reference: string;
+  total_amount_paid: number;
+  rejection_reason: string | null;
+  created_at: string | null;
+  reviewed_at: string | null;
+};
+
 type ContributionsApiResponse = {
   success: boolean;
   message?: string;
   summary?: Summary;
   contributions?: Contribution[];
+};
+
+type ManualSubmissionsApiResponse = {
+  success?: boolean;
+  message?: string;
+  submissions?: ManualPaymentSubmission[];
 };
 
 type VerifyPaymentResponse = {
@@ -145,6 +165,7 @@ function getStatusStyle(status: string | null | undefined) {
   if (
     [
       'PENDING',
+      'PENDING_REVIEW',
       'FORMING',
       'COLLECTING',
       'READY_FOR_PAYOUT',
@@ -201,6 +222,22 @@ function getPaymentReferenceFromUrl(searchParams: {
   ).trim();
 }
 
+function sortManualSubmissionsByPriority(
+  submissions: ManualPaymentSubmission[]
+) {
+  return [...submissions].sort((a, b) => {
+    const aPending = a.status === 'PENDING_REVIEW' ? 1 : 0;
+    const bPending = b.status === 'PENDING_REVIEW' ? 1 : 0;
+
+    if (aPending !== bPending) return bPending - aPending;
+
+    const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+
+    return bTime - aTime;
+  });
+}
+
 function StatCard({
   title,
   value,
@@ -245,6 +282,10 @@ export default function AgentFundSpaceContributionsPage() {
     total_amount_paid: 0,
   });
 
+  const [manualPaymentSubmissions, setManualPaymentSubmissions] = useState<
+    ManualPaymentSubmission[]
+  >([]);
+
   const [loading, setLoading] = useState(true);
   const [verifyingPayment, setVerifyingPayment] = useState(false);
   const [momoPaymentContribution, setMomoPaymentContribution] =
@@ -271,6 +312,51 @@ export default function AgentFundSpaceContributionsPage() {
 
     return session.access_token;
   };
+
+  const loadManualPaymentSubmissions = useCallback(
+    async (contributionIds: string[]) => {
+      if (contributionIds.length === 0) {
+        setManualPaymentSubmissions([]);
+        return;
+      }
+
+      try {
+        const token = await getAccessToken();
+
+        const params = new URLSearchParams({
+          contribution_ids: contributionIds.join(','),
+        });
+
+        const response = await fetch(
+          `/api/agent/fund-space/manual-payment-submissions?${params.toString()}`,
+          {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+
+        const result = (await response.json()) as ManualSubmissionsApiResponse;
+
+        if (!response.ok || !result.success) {
+          throw new Error(
+            result.message || 'Unable to load MoMo verification submissions.'
+          );
+        }
+
+        setManualPaymentSubmissions(result.submissions || []);
+      } catch (error) {
+        console.warn(
+          'Agent manual MoMo submissions load warning:',
+          error instanceof Error ? error.message : error
+        );
+
+        setManualPaymentSubmissions([]);
+      }
+    },
+    []
+  );
 
   const loadContributions = useCallback(async () => {
     try {
@@ -304,7 +390,9 @@ export default function AgentFundSpaceContributionsPage() {
         throw new Error(result.message || 'Could not load contributions.');
       }
 
-      setContributions(result.contributions || []);
+      const loadedContributions = result.contributions || [];
+
+      setContributions(loadedContributions);
       setSummary(
         result.summary || {
           total_contributions: 0,
@@ -314,6 +402,10 @@ export default function AgentFundSpaceContributionsPage() {
           total_amount_due: 0,
           total_amount_paid: 0,
         }
+      );
+
+      await loadManualPaymentSubmissions(
+        loadedContributions.map((item) => item.id)
       );
     } catch (error) {
       setMessage({
@@ -326,7 +418,7 @@ export default function AgentFundSpaceContributionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [filter, searchTerm]);
+  }, [filter, searchTerm, loadManualPaymentSubmissions]);
 
   const verifyReturnedPayment = useCallback(
     async (reference: string) => {
@@ -437,6 +529,20 @@ export default function AgentFundSpaceContributionsPage() {
     });
   }, [contributions, searchTerm]);
 
+  const manualSubmissionByContributionId = useMemo(() => {
+    const map = new Map<string, ManualPaymentSubmission>();
+
+    for (const submission of sortManualSubmissionsByPriority(
+      manualPaymentSubmissions
+    )) {
+      if (!map.has(submission.contribution_id)) {
+        map.set(submission.contribution_id, submission);
+      }
+    }
+
+    return map;
+  }, [manualPaymentSubmissions]);
+
   function handleOnlinePaymentComingSoon() {
     const text =
       'Online payment will be available soon. For now, please use Pay with MoMo and submit the transaction reference for verification.';
@@ -453,12 +559,43 @@ export default function AgentFundSpaceContributionsPage() {
   }
 
   const handleMomoPaymentSubmitted = async () => {
+    const submittedContribution = momoPaymentContribution;
+
     setMomoPaymentContribution(null);
+
+    if (submittedContribution) {
+      setManualPaymentSubmissions((current) => {
+        const alreadyExists = current.some(
+          (item) =>
+            item.contribution_id === submittedContribution.id &&
+            item.status === 'PENDING_REVIEW'
+        );
+
+        if (alreadyExists) return current;
+
+        return [
+          {
+            id: `local-${submittedContribution.id}-${Date.now()}`,
+            contribution_id: submittedContribution.id,
+            fund_space_id: submittedContribution.fund_space_id,
+            user_id: submittedContribution.user_id,
+            agent_id: null,
+            status: 'PENDING_REVIEW',
+            transaction_reference: 'Submitted for verification',
+            total_amount_paid: getAmountRemaining(submittedContribution),
+            rejection_reason: null,
+            created_at: new Date().toISOString(),
+            reviewed_at: null,
+          },
+          ...current,
+        ];
+      });
+    }
 
     setMessage({
       type: 'success',
       text:
-        'MoMo payment reference submitted successfully. Admin will verify the transaction before the contribution is marked as paid.',
+        'MoMo payment reference submitted successfully. Pay with MoMo is locked until admin reviews the transaction.',
     });
 
     toast({
@@ -494,9 +631,8 @@ export default function AgentFundSpaceContributionsPage() {
 
               <p className="mt-4 max-w-2xl text-sm leading-7 text-emerald-50 md:text-base">
                 Use this page to help assigned customers complete their weekly
-                Fund Space contribution. The customer pays to the TrustPoint MoMo
-                account, then you submit the transaction reference for admin
-                verification.
+                Fund Space contribution. Once a MoMo reference is submitted, Pay
+                with MoMo will be locked until admin approves or rejects it.
               </p>
             </div>
 
@@ -707,7 +843,18 @@ export default function AgentFundSpaceContributionsPage() {
                 const fundSpace = contribution.fund_space;
                 const round = contribution.round;
                 const remaining = getAmountRemaining(contribution);
-                const payable = canPayContribution(contribution);
+                const basePayable = canPayContribution(contribution);
+                const manualSubmission =
+                  manualSubmissionByContributionId.get(contribution.id) || null;
+                const pendingManualSubmission =
+                  manualSubmission?.status === 'PENDING_REVIEW'
+                    ? manualSubmission
+                    : null;
+                const rejectedManualSubmission =
+                  manualSubmission?.status === 'REJECTED'
+                    ? manualSubmission
+                    : null;
+                const payable = basePayable && !pendingManualSubmission;
 
                 return (
                   <div key={contribution.id} className="p-5 md:p-6">
@@ -720,10 +867,14 @@ export default function AgentFundSpaceContributionsPage() {
 
                           <span
                             className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                              contribution.status
+                              pendingManualSubmission
+                                ? 'PENDING_REVIEW'
+                                : contribution.status
                             )}`}
                           >
-                            {formatLabel(contribution.status)}
+                            {pendingManualSubmission
+                              ? 'Awaiting Verification'
+                              : formatLabel(contribution.status)}
                           </span>
 
                           {round && (
@@ -791,6 +942,48 @@ export default function AgentFundSpaceContributionsPage() {
                             {contribution.payment_reference || 'Not paid yet'}
                           </p>
                         </div>
+
+                        {pendingManualSubmission && (
+                          <div className="mt-4 flex items-start gap-3 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-700">
+                            <Clock className="mt-0.5 h-5 w-5 shrink-0" />
+                            <div>
+                              <p className="font-black">
+                                MoMo payment awaiting verification
+                              </p>
+                              <p className="mt-1 leading-6">
+                                This contribution already has a MoMo payment
+                                request awaiting admin review. Another reference
+                                cannot be submitted until admin rejects or
+                                approves it.
+                              </p>
+                              <p className="mt-2 text-xs font-semibold">
+                                Reference:{' '}
+                                {pendingManualSubmission.transaction_reference}
+                              </p>
+                            </div>
+                          </div>
+                        )}
+
+                        {rejectedManualSubmission && !pendingManualSubmission && (
+                          <div className="mt-4 flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">
+                            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+                            <div>
+                              <p className="font-black">
+                                Previous MoMo payment was rejected
+                              </p>
+                              <p className="mt-1 leading-6">
+                                You can submit a corrected MoMo payment
+                                reference for this customer.
+                              </p>
+                              {rejectedManualSubmission.rejection_reason && (
+                                <p className="mt-2 text-xs font-semibold">
+                                  Reason:{' '}
+                                  {rejectedManualSubmission.rejection_reason}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       <div className="w-full rounded-3xl border border-gray-100 bg-gray-50 p-5 xl:w-[380px]">
@@ -809,18 +1002,20 @@ export default function AgentFundSpaceContributionsPage() {
                           </div>
                         </div>
 
-                        {payable ? (
+                        {basePayable ? (
                           <div className="mt-5 grid gap-3">
                             <button
                               type="button"
-                              disabled={verifyingPayment}
+                              disabled={!payable || verifyingPayment}
                               onClick={() =>
-                                setMomoPaymentContribution(contribution)
+                                payable && setMomoPaymentContribution(contribution)
                               }
                               className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-gray-300"
                             >
                               <Smartphone size={16} />
-                              Pay with MoMo
+                              {pendingManualSubmission
+                                ? 'Awaiting Verification'
+                                : 'Pay with MoMo'}
                             </button>
 
                             <button
@@ -839,11 +1034,18 @@ export default function AgentFundSpaceContributionsPage() {
                               </span>
                             </button>
 
-                            <p className="text-xs leading-5 text-gray-500">
-                              The customer pays to the TrustPoint MoMo account.
-                              After submission, admin verifies the transaction
-                              before marking the contribution as paid.
-                            </p>
+                            {pendingManualSubmission ? (
+                              <p className="text-xs leading-5 text-amber-700">
+                                Pay with MoMo is locked because a payment request
+                                is already awaiting admin verification.
+                              </p>
+                            ) : (
+                              <p className="text-xs leading-5 text-gray-500">
+                                The customer pays to the TrustPoint MoMo account.
+                                After submission, admin verifies the transaction
+                                before marking the contribution as paid.
+                              </p>
+                            )}
                           </div>
                         ) : (
                           <div className="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm font-semibold text-emerald-700">

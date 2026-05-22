@@ -6,7 +6,6 @@ import { useMemo, useState } from 'react';
 import type { ElementType, ReactNode } from 'react';
 
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -69,11 +68,7 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
     try {
       setLoggingOut(true);
 
-      await supabase.auth.signOut();
-
-      if (typeof signOut === 'function') {
-        await signOut();
-      }
+      await signOut();
 
       router.replace('/auth/login');
       router.refresh();

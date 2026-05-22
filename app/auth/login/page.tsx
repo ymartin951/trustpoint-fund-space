@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -47,9 +47,18 @@ function getRedirectPath(profile: ProfileRouteData) {
   return '/dashboard';
 }
 
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  return fallback;
+}
+
 export default function LoginPage() {
   const router = useRouter();
 
+  const [checkingSession, setCheckingSession] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
@@ -57,6 +66,86 @@ export default function LoginPage() {
 
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+
+  async function loadProfileRoute(userId: string) {
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('role, verification_status, status')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (profileError || !profile) {
+      console.error('Login profile lookup error:', profileError);
+
+      throw new Error(
+        'Your account profile could not be found. Please contact support.'
+      );
+    }
+
+    const routeProfile: ProfileRouteData = {
+      role: profile.role as UserRole,
+      verification_status: profile.verification_status as VerificationStatus,
+      status: profile.status as AccountStatus,
+    };
+
+    if (routeProfile.status !== 'ACTIVE') {
+      throw new Error(
+        'Your account is not active. Please contact TrustPoint support.'
+      );
+    }
+
+    return getRedirectPath(routeProfile);
+  }
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function redirectIfAlreadyLoggedIn() {
+      try {
+        const {
+          data: { session },
+          error,
+        } = await supabase.auth.getSession();
+
+        if (!mounted) return;
+
+        if (error || !session?.user?.id) {
+          return;
+        }
+
+        const redirectPath = await loadProfileRoute(session.user.id);
+
+        if (!mounted) return;
+
+        router.replace(redirectPath);
+        router.refresh();
+      } catch (error) {
+        console.warn('Existing session check warning:', error);
+
+        if (mounted) {
+          await supabase.auth.signOut();
+        }
+      } finally {
+        if (mounted) {
+          setCheckingSession(false);
+        }
+      }
+    }
+
+    redirectIfAlreadyLoggedIn();
+
+    const fallback = setTimeout(() => {
+      if (mounted) {
+        setCheckingSession(false);
+      }
+    }, 7000);
+
+    return () => {
+      mounted = false;
+      clearTimeout(fallback);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -91,48 +180,33 @@ export default function LoginPage() {
         return;
       }
 
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('role, verification_status, status')
-        .eq('id', data.user.id)
-        .maybeSingle();
+      const redirectPath = await loadProfileRoute(data.user.id);
 
-      if (profileError || !profile) {
-        console.error('Login profile lookup error:', profileError);
-
-        setErrorMessage(
-          'Your account profile could not be found. Please contact support.'
-        );
-        return;
-      }
-
-      const routeProfile: ProfileRouteData = {
-        role: profile.role as UserRole,
-        verification_status: profile.verification_status as VerificationStatus,
-        status: profile.status as AccountStatus,
-      };
-
-      if (routeProfile.status !== 'ACTIVE') {
-        setErrorMessage(
-          'Your account is not active. Please contact TrustPoint support.'
-        );
-        return;
-      }
-
-      router.replace(getRedirectPath(routeProfile));
+      router.replace(redirectPath);
+      router.refresh();
     } catch (error) {
       console.error('Login error:', error);
 
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Something went wrong. Please try again.';
-
-      setErrorMessage(message);
+      setErrorMessage(
+        getErrorMessage(error, 'Something went wrong. Please try again.')
+      );
     } finally {
       setLoading(false);
     }
   };
+
+  if (checkingSession) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 px-6">
+        <div className="rounded-3xl border border-slate-100 bg-white p-8 text-center shadow-sm">
+          <Loader2 className="mx-auto h-9 w-9 animate-spin text-blue-600" />
+          <p className="mt-4 text-sm font-semibold text-slate-600">
+            Checking your session...
+          </p>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-slate-50">
