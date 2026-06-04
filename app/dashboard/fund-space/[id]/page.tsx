@@ -30,6 +30,7 @@ import { ManualMerchantPaymentModal } from '@/components/fund-space/ManualMercha
 import { supabase } from '@/lib/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
+import TrustShieldCard from '@/components/trust-shield/TrustShieldCard';
 
 type FundSpace = {
   id: string;
@@ -325,6 +326,8 @@ export default function FundSpaceDetailsPage() {
   const [manualPaymentSubmissions, setManualPaymentSubmissions] = useState<
     ManualPaymentSubmission[]
   >([]);
+  const [optimisticPendingContributionIds, setOptimisticPendingContributionIds] =
+    useState<string[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
 
   const loadFundSpace = useCallback(async () => {
@@ -511,6 +514,8 @@ export default function FundSpaceDetailsPage() {
 
   const loadManualPaymentSubmissions = useCallback(
     async (userId: string) => {
+      let loadedSubmissions: ManualPaymentSubmission[] = [];
+
       const { data, error } = await supabase
         .from('manual_payment_submissions')
         .select(
@@ -523,15 +528,80 @@ export default function FundSpaceDetailsPage() {
 
       if (error) {
         console.warn('Manual MoMo submissions load warning:', error.message);
-        setManualPaymentSubmissions([]);
-        return;
+      } else {
+        loadedSubmissions = (data || []) as unknown as ManualPaymentSubmission[];
       }
 
-      setManualPaymentSubmissions(
-        (data || []) as unknown as ManualPaymentSubmission[]
-      );
+      const currentRole = String(profile?.role || '').toUpperCase();
+      const canUseAdminFallback =
+        currentRole === 'ADMIN' || currentRole === 'SUPER_ADMIN';
+
+      if (canUseAdminFallback) {
+        try {
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+
+          if (session?.access_token) {
+            const response = await fetch(
+              `/api/admin/manual-payment-submissions?status=ALL&search=${encodeURIComponent(
+                userId
+              )}`,
+              {
+                method: 'GET',
+                headers: {
+                  Authorization: `Bearer ${session.access_token}`,
+                },
+              }
+            );
+
+            const result = await response.json().catch(() => null);
+
+            if (response.ok && result?.success && Array.isArray(result.submissions)) {
+              const adminLoaded = (result.submissions as ManualPaymentSubmission[]).filter(
+                (submission) =>
+                  submission.user_id === userId &&
+                  submission.fund_space_id === fundSpaceId &&
+                  ['PENDING_REVIEW', 'REJECTED'].includes(submission.status)
+              );
+
+              if (adminLoaded.length > 0) {
+                loadedSubmissions = adminLoaded;
+              }
+            }
+          }
+        } catch (adminFallbackError) {
+          console.warn(
+            'Admin manual MoMo submission fallback warning:',
+            adminFallbackError instanceof Error
+              ? adminFallbackError.message
+              : adminFallbackError
+          );
+        }
+      }
+
+      setManualPaymentSubmissions(loadedSubmissions);
+
+      if (loadedSubmissions.length > 0) {
+        const loadedPendingContributionIds = new Set(
+          loadedSubmissions
+            .filter((submission) => submission.status === 'PENDING_REVIEW')
+            .map((submission) => submission.contribution_id)
+        );
+
+        /**
+         * Only remove the local lock when the real PENDING_REVIEW row has been
+         * loaded from the server. Do not remove it just because an older REJECTED
+         * row exists for the same contribution.
+         */
+        setOptimisticPendingContributionIds((current) =>
+          current.filter(
+            (contributionId) => !loadedPendingContributionIds.has(contributionId)
+          )
+        );
+      }
     },
-    [fundSpaceId]
+    [fundSpaceId, profile?.role]
   );
 
   const loadPage = useCallback(
@@ -811,8 +881,39 @@ export default function FundSpaceDetailsPage() {
       }
     }
 
+    for (const contributionId of optimisticPendingContributionIds) {
+      const existingSubmission = map.get(contributionId);
+
+      /**
+       * Important:
+       * An older REJECTED submission must not keep the button active after the
+       * user submits a new reference. The local PENDING_REVIEW lock must override
+       * any older non-pending record until the server reloads the real pending row.
+       */
+      if (!existingSubmission || existingSubmission.status !== 'PENDING_REVIEW') {
+        map.set(contributionId, {
+          id: `optimistic-${contributionId}`,
+          contribution_id: contributionId,
+          fund_space_id: fundSpaceId,
+          user_id: profile?.id || '',
+          agent_id: null,
+          status: 'PENDING_REVIEW',
+          transaction_reference: 'Submitted',
+          total_amount_paid: 0,
+          rejection_reason: null,
+          created_at: new Date().toISOString(),
+          reviewed_at: null,
+        });
+      }
+    }
+
     return map;
-  }, [manualPaymentSubmissions]);
+  }, [
+    manualPaymentSubmissions,
+    optimisticPendingContributionIds,
+    fundSpaceId,
+    profile?.id,
+  ]);
 
   const paymentTargetContribution = currentContribution || myNextContribution;
   const amountRemaining = getAmountRemaining(paymentTargetContribution);
@@ -831,6 +932,11 @@ export default function FundSpaceDetailsPage() {
       ? manualSubmissionForTarget
       : null;
 
+  const isMomoLockedForTarget = Boolean(
+    paymentTargetContribution &&
+      optimisticPendingContributionIds.includes(paymentTargetContribution.id)
+  ) || Boolean(pendingManualSubmissionForTarget);
+
   const pendingPaymentForTarget = useMemo(() => {
     if (!paymentTargetContribution) return null;
 
@@ -843,17 +949,35 @@ export default function FundSpaceDetailsPage() {
     );
   }, [paymentAttempts, paymentTargetContribution]);
 
+  const currentUserRole = String(profile?.role || '').toUpperCase();
+  const isAdminOrSuperAdmin =
+    currentUserRole === 'ADMIN' || currentUserRole === 'SUPER_ADMIN';
+
+  const isAllowedFundSpacePayer = [
+    'USER',
+    'AGENT',
+    'ADMIN',
+    'SUPER_ADMIN',
+  ].includes(currentUserRole);
+
+  const hasEligiblePaymentProfile =
+    profile?.status === 'ACTIVE' &&
+    isAllowedFundSpacePayer &&
+    (profile?.verification_status === 'VERIFIED' || isAdminOrSuperAdmin);
+
+  const isContributionAlreadyPaid =
+    ['PAID', 'WAIVED'].includes(paymentTargetContribution?.status || '') ||
+    Number(paymentTargetContribution?.amount_paid || 0) >=
+      Number(paymentTargetContribution?.amount_due || 0);
+
   const canPayContribution =
     Boolean(paymentTargetContribution) &&
     amountRemaining > 0 &&
-    profile?.status === 'ACTIVE' &&
-    profile?.verification_status === 'VERIFIED' &&
-    (profile?.role === 'USER' || profile?.role === 'AGENT') &&
+    hasEligiblePaymentProfile &&
     fundSpace?.status === 'ACTIVE' &&
-    !['PAID', 'WAIVED'].includes(paymentTargetContribution?.status || '');
+    !isContributionAlreadyPaid;
 
-  const canPayWithMomo =
-    canPayContribution && !pendingManualSubmissionForTarget;
+  const canPayWithMomo = canPayContribution && !isMomoLockedForTarget;
 
   const myLatestPayout = myPayouts[0] || null;
 
@@ -870,6 +994,39 @@ export default function FundSpaceDetailsPage() {
     : 0;
 
   async function handleMomoPaymentSubmitted() {
+    const submittedContributionId = momoPaymentContribution?.id;
+
+    if (submittedContributionId) {
+      setOptimisticPendingContributionIds((current) =>
+        current.includes(submittedContributionId)
+          ? current
+          : [...current, submittedContributionId]
+      );
+
+      setManualPaymentSubmissions((current) => {
+        const withoutOlderRowsForContribution = current.filter(
+          (submission) => submission.contribution_id !== submittedContributionId
+        );
+
+        return [
+          {
+            id: `optimistic-${submittedContributionId}`,
+            contribution_id: submittedContributionId,
+            fund_space_id: fundSpaceId,
+            user_id: profile?.id || '',
+            agent_id: null,
+            status: 'PENDING_REVIEW',
+            transaction_reference: 'Submitted',
+            total_amount_paid: 0,
+            rejection_reason: null,
+            created_at: new Date().toISOString(),
+            reviewed_at: null,
+          },
+          ...withoutOlderRowsForContribution,
+        ];
+      });
+    }
+
     setMomoPaymentContribution(null);
 
     toast({
@@ -887,6 +1044,15 @@ export default function FundSpaceDetailsPage() {
         title: 'No contribution found',
         description: 'There is no pending contribution to pay.',
         variant: 'destructive',
+      });
+      return;
+    }
+
+    if (isMomoLockedForTarget) {
+      toast({
+        title: 'Awaiting verification',
+        description:
+          'Your MoMo payment reference has already been submitted for this contribution. Please wait for admin verification before submitting again.',
       });
       return;
     }
@@ -1113,6 +1279,8 @@ export default function FundSpaceDetailsPage() {
           </div>
         </div>
 
+        <TrustShieldCard userId={profile?.id} />
+
         <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
           <SummaryCard
             title="Members"
@@ -1222,18 +1390,27 @@ export default function FundSpaceDetailsPage() {
             <div className="space-y-3 lg:w-[280px]">
               <button
                 type="button"
-                onClick={() =>
-                  paymentTargetContribution &&
-                  canPayWithMomo &&
-                  setMomoPaymentContribution(paymentTargetContribution)
-                }
-                disabled={!canPayWithMomo || verifyingPayment}
+                onClick={() => {
+                  if (!paymentTargetContribution) return;
+
+                  if (isMomoLockedForTarget) {
+                    toast({
+                      title: 'Awaiting verification',
+                      description:
+                        'Your MoMo payment reference has already been submitted for this contribution. Please wait for admin verification.',
+                    });
+                    return;
+                  }
+
+                  if (!canPayWithMomo) return;
+
+                  setMomoPaymentContribution(paymentTargetContribution);
+                }}
+                disabled={isMomoLockedForTarget || !canPayWithMomo || verifyingPayment}
                 className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Smartphone className="h-4 w-4" />
-                {pendingManualSubmissionForTarget
-                  ? 'Awaiting Verification'
-                  : 'Pay with MoMo'}
+                {isMomoLockedForTarget ? 'Awaiting Verification' : 'Pay with MoMo'}
               </button>
 
               <button
@@ -1246,7 +1423,7 @@ export default function FundSpaceDetailsPage() {
                 Pay Online
               </button>
 
-              {pendingManualSubmissionForTarget && (
+              {isMomoLockedForTarget && (
                 <p className="text-xs leading-5 text-amber-700">
                   Pay with MoMo is locked because this contribution already has a
                   payment request awaiting admin verification.
@@ -1255,8 +1432,11 @@ export default function FundSpaceDetailsPage() {
 
               {!canPayContribution && paymentTargetContribution && (
                 <p className="text-xs leading-5 text-gray-500">
-                  Payment may be unavailable because your account is not verified,
-                  the group is not active, or this contribution is already paid.
+                  Payment may be unavailable because your account is not active,
+                  your role cannot pay this contribution, the group is not active,
+                  or this contribution is already paid. Admin and super admin
+                  members are allowed to submit their own MoMo reference, but
+                  another admin must verify it.
                 </p>
               )}
             </div>

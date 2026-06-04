@@ -1,17 +1,21 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
+import Link from 'next/link';
 import {
   AlertCircle,
   ArrowRight,
   CheckCircle2,
   Clock,
   CreditCard,
+  Eye,
+  FileCheck2,
+  Info,
   Loader2,
   RefreshCw,
   Search,
+  Smartphone,
   TrendingDown,
   TrendingUp,
   Wallet,
@@ -20,45 +24,141 @@ import {
 
 import { supabase } from '@/lib/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
-import type { Database } from '@/lib/database.types';
 
-type TransactionRow = Database['public']['Tables']['transactions']['Row'];
-type PaymentTransactionRow =
-  Database['public']['Tables']['payment_transactions']['Row'];
-
-type StatusGroup = 'SUCCESSFUL' | 'PENDING' | 'FAILED' | 'OTHER';
+type RecordSource = 'ALL' | 'MANUAL_MOMO' | 'CONFIRMED' | 'PROVIDER';
+type StatusGroup = 'ALL' | 'SUCCESSFUL' | 'PENDING' | 'FAILED' | 'OTHER';
 type Direction = 'CREDIT' | 'DEBIT' | 'INCOMING' | 'OUTGOING' | 'NEUTRAL';
 
-type ConfirmedRecord = {
+type ManualPaymentSubmissionRow = {
   id: string;
-  amount: number;
-  currency: string;
-  type: string;
+  agent_id: string | null;
+  amount_due: number;
+  company_payment_account_id: string | null;
+  contribution_id: string;
+  created_at: string;
+  fund_space_id: string;
+  payer_relationship: string | null;
+  payer_type: string;
+  payment_note: string | null;
+  rejection_reason: string | null;
+  reviewed_at: string | null;
+  reviewed_by: string | null;
+  round_id: string;
+  sender_name: string | null;
+  sender_network: string | null;
+  sender_phone: string | null;
+  service_fee: number;
   status: string;
-  direction: Direction;
-  channel: string;
-  reference: string;
-  description: string;
-  created_at: string | null;
+  submitted_by: string | null;
+  submitted_by_role: string | null;
+  total_amount_paid: number;
+  transaction_reference: string;
+  user_id: string;
 };
 
-type ProviderRecord = {
+type TransactionRow = {
   id: string;
   amount: number;
+  channel: string;
+  contribution_id: string | null;
+  created_at: string | null;
+  created_by: string | null;
   currency: string;
-  type: string;
+  direction: string;
+  fund_space_id: string | null;
+  fund_space_round_id: string | null;
+  metadata: unknown | null;
+  note: string | null;
+  payment_reference: string | null;
+  payout_id: string | null;
+  savings_plan_id: string | null;
   status: string;
+  type: string;
+  user_id: string;
+  wallet_id: string | null;
+  withdrawal_request_id: string | null;
+};
+
+type PaymentTransactionRow = {
+  id: string;
+  agent_id: string | null;
+  amount: number;
+  channel: string;
+  contribution_id: string | null;
+  created_at: string | null;
+  currency: string;
+  customer_id: string | null;
+  direction: string;
+  failure_reason: string | null;
+  fee_amount: number | null;
+  fund_space_id: string | null;
+  fund_space_round_id: string | null;
+  initiated_by: string | null;
+  internal_reference: string;
+  mobile_network: string | null;
+  payer_name: string | null;
+  payer_phone: string | null;
+  payment_type: string;
+  provider: string;
+  provider_reference: string | null;
+  provider_status: string | null;
+  status: string;
+  user_id: string;
+};
+
+type UserTransactionRecord = {
+  id: string;
+  raw_id: string;
+  source: Exclude<RecordSource, 'ALL'>;
+  title: string;
+  description: string;
+  amount: number;
+  service_fee: number | null;
+  currency: string;
+  status: string;
+  status_group: Exclude<StatusGroup, 'ALL'>;
   direction: Direction;
   channel: string;
-  provider: string;
   reference: string;
-  internal_reference: string;
-  description: string;
+  secondary_reference: string | null;
+  fund_space_id: string | null;
+  contribution_id: string | null;
   created_at: string | null;
+  action_href: string;
+  action_label: string;
+  rejection_reason: string | null;
+};
+
+type Stats = {
+  total: number;
+  manual_momo: number;
+  awaiting_review: number;
+  confirmed: number;
+  provider: number;
+  successful: number;
+  pending: number;
+  failed: number;
+  confirmed_value: number;
+  confirmed_credit_value: number;
+  confirmed_debit_value: number;
+};
+
+const defaultStats: Stats = {
+  total: 0,
+  manual_momo: 0,
+  awaiting_review: 0,
+  confirmed: 0,
+  provider: 0,
+  successful: 0,
+  pending: 0,
+  failed: 0,
+  confirmed_value: 0,
+  confirmed_credit_value: 0,
+  confirmed_debit_value: 0,
 };
 
 function formatCurrency(amount: number | string | null | undefined) {
-  return `GH₵ ${Number(amount || 0).toLocaleString('en-GH', {
+  return `GH₵${Number(amount || 0).toLocaleString('en-GH', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
@@ -73,60 +173,22 @@ function formatDateTime(dateString: string | null | undefined) {
     return 'Invalid date';
   }
 
-  return date.toLocaleString('en-GH', {
+  return new Intl.DateTimeFormat('en-GH', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  });
+  }).format(date);
 }
 
 function formatLabel(value: string | null | undefined) {
-  const safeValue = value || 'TRANSACTION';
+  if (!value) return 'Not set';
 
-  return safeValue
+  return value
     .replaceAll('_', ' ')
     .toLowerCase()
     .replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-function getStatusGroup(status: string | null | undefined): StatusGroup {
-  const value = String(status || 'PENDING').toUpperCase();
-
-  if (['SUCCESS', 'COMPLETED', 'PAID', 'APPROVED', 'CONFIRMED'].includes(value)) {
-    return 'SUCCESSFUL';
-  }
-
-  if (['PENDING', 'PROCESSING', 'PENDING_ADMIN_APPROVAL'].includes(value)) {
-    return 'PENDING';
-  }
-
-  if (
-    ['FAILED', 'REJECTED', 'CANCELLED', 'ABANDONED', 'REVERSED'].includes(value)
-  ) {
-    return 'FAILED';
-  }
-
-  return 'OTHER';
-}
-
-function getStatusStyle(status: string | null | undefined) {
-  const group = getStatusGroup(status);
-
-  if (group === 'SUCCESSFUL') {
-    return 'bg-emerald-50 text-emerald-700 border-emerald-100';
-  }
-
-  if (group === 'PENDING') {
-    return 'bg-amber-50 text-amber-700 border-amber-100';
-  }
-
-  if (group === 'FAILED') {
-    return 'bg-red-50 text-red-700 border-red-100';
-  }
-
-  return 'bg-gray-50 text-gray-700 border-gray-100';
 }
 
 function normalizeDirection(value: string | null | undefined): Direction {
@@ -140,126 +202,353 @@ function normalizeDirection(value: string | null | undefined): Direction {
   return 'NEUTRAL';
 }
 
+function getStatusGroup(
+  status: string | null | undefined
+): Exclude<StatusGroup, 'ALL'> {
+  const value = String(status || 'PENDING').toUpperCase();
+
+  if (
+    ['SUCCESS', 'SUCCESSFUL', 'COMPLETED', 'PAID', 'APPROVED', 'CONFIRMED'].includes(
+      value
+    )
+  ) {
+    return 'SUCCESSFUL';
+  }
+
+  if (
+    ['PENDING', 'PROCESSING', 'PENDING_REVIEW', 'PENDING_ADMIN_APPROVAL'].includes(
+      value
+    )
+  ) {
+    return 'PENDING';
+  }
+
+  if (
+    ['FAILED', 'REJECTED', 'CANCELLED', 'ABANDONED', 'REVERSED', 'DEFAULTED'].includes(
+      value
+    )
+  ) {
+    return 'FAILED';
+  }
+
+  return 'OTHER';
+}
+
+function getStatusStyle(statusGroup: string) {
+  if (statusGroup === 'SUCCESSFUL') {
+    return 'border-emerald-100 bg-emerald-50 text-emerald-700';
+  }
+
+  if (statusGroup === 'PENDING') {
+    return 'border-amber-100 bg-amber-50 text-amber-700';
+  }
+
+  if (statusGroup === 'FAILED') {
+    return 'border-red-100 bg-red-50 text-red-700';
+  }
+
+  return 'border-gray-100 bg-gray-50 text-gray-700';
+}
+
+function getSourceStyle(source: UserTransactionRecord['source']) {
+  if (source === 'MANUAL_MOMO') {
+    return 'border-emerald-100 bg-emerald-50 text-emerald-700';
+  }
+
+  if (source === 'CONFIRMED') {
+    return 'border-blue-100 bg-blue-50 text-blue-700';
+  }
+
+  return 'border-purple-100 bg-purple-50 text-purple-700';
+}
+
 function getDirectionStyle(direction: Direction) {
   if (direction === 'CREDIT' || direction === 'INCOMING') {
-    return 'text-emerald-700 bg-emerald-50 border-emerald-100';
+    return 'border-emerald-100 bg-emerald-50 text-emerald-700';
   }
 
   if (direction === 'DEBIT' || direction === 'OUTGOING') {
-    return 'text-red-700 bg-red-50 border-red-100';
+    return 'border-red-100 bg-red-50 text-red-700';
   }
 
-  return 'text-gray-700 bg-gray-50 border-gray-100';
+  return 'border-gray-100 bg-gray-50 text-gray-700';
 }
 
 function getDirectionIcon(direction: Direction) {
   if (direction === 'CREDIT' || direction === 'INCOMING') {
-    return <TrendingUp size={15} />;
+    return <TrendingUp className="h-4 w-4" />;
   }
 
   if (direction === 'DEBIT' || direction === 'OUTGOING') {
-    return <TrendingDown size={15} />;
+    return <TrendingDown className="h-4 w-4" />;
   }
 
-  return <CreditCard size={15} />;
+  return <Wallet className="h-4 w-4" />;
 }
 
-function mapConfirmedRecord(item: TransactionRow): ConfirmedRecord {
-  return {
-    id: item.id,
-    amount: Number(item.amount || 0),
-    currency: item.currency || 'GHS',
-    type: item.type || 'TRANSACTION',
-    status: item.status || 'PENDING',
-    direction: normalizeDirection(item.direction),
-    channel: item.channel || 'SYSTEM',
-    reference: item.payment_reference || item.id.slice(0, 8),
-    description: item.note || 'Confirmed TrustPoint system transaction',
-    created_at: item.created_at,
-  };
+function getSourceIcon(source: UserTransactionRecord['source']) {
+  if (source === 'MANUAL_MOMO') {
+    return <Smartphone className="h-5 w-5" />;
+  }
+
+  if (source === 'CONFIRMED') {
+    return <Wallet className="h-5 w-5" />;
+  }
+
+  return <CreditCard className="h-5 w-5" />;
 }
 
 function getProviderDescription(item: PaymentTransactionRow) {
-  if (item.payment_type === 'WALLET_DEPOSIT') {
-    return 'Wallet deposit payment attempt from provider';
+  const type = String(item.payment_type || '').toUpperCase();
+
+  if (type === 'WALLET_DEPOSIT') {
+    return 'Wallet deposit payment attempt from payment provider.';
   }
 
-  if (item.payment_type === 'FUND_SPACE_CONTRIBUTION') {
-    return 'Fund Space contribution payment attempt from provider';
+  if (type === 'FUND_SPACE_CONTRIBUTION') {
+    return 'Fund Space contribution payment attempt from payment provider.';
   }
 
-  if (item.payment_type === 'AGENT_CUSTOMER_DEPOSIT') {
-    return 'Agent-assisted wallet deposit payment attempt';
+  if (type === 'AGENT_CUSTOMER_DEPOSIT') {
+    return 'Agent-assisted customer wallet deposit payment attempt.';
   }
 
-  if (item.payment_type === 'AGENT_CUSTOMER_CONTRIBUTION') {
-    return 'Agent-assisted contribution payment attempt';
+  if (type === 'AGENT_CUSTOMER_CONTRIBUTION') {
+    return 'Agent-assisted customer contribution payment attempt.';
   }
 
-  if (item.payment_type === 'WITHDRAWAL_PAYOUT') {
-    return 'Withdrawal payout provider record';
+  if (type === 'WITHDRAWAL_PAYOUT') {
+    return 'Withdrawal payout provider record.';
   }
 
-  if (item.payment_type === 'FUND_SPACE_PAYOUT') {
-    return 'Fund Space payout provider record';
+  if (type === 'FUND_SPACE_PAYOUT') {
+    return 'Fund Space payout provider record.';
   }
 
-  return 'Payment provider record';
+  return 'Payment provider tracking record.';
 }
 
-function mapProviderRecord(item: PaymentTransactionRow): ProviderRecord {
+function getActionHref(record: {
+  source: UserTransactionRecord['source'];
+  fund_space_id: string | null;
+  contribution_id: string | null;
+}) {
+  if (record.source === 'MANUAL_MOMO' && record.fund_space_id) {
+    return `/dashboard/fund-space/${record.fund_space_id}`;
+  }
+
+  if (record.contribution_id && record.fund_space_id) {
+    return `/dashboard/fund-space/${record.fund_space_id}`;
+  }
+
+  if (record.fund_space_id) {
+    return `/dashboard/fund-space/${record.fund_space_id}`;
+  }
+
+  return '/dashboard/transactions';
+}
+
+function mapManualRecord(item: ManualPaymentSubmissionRow): UserTransactionRecord {
+  const statusGroup = getStatusGroup(item.status);
+
   return {
-    id: item.id,
-    amount: Number(item.amount || 0),
-    currency: item.currency || 'GHS',
-    type: item.payment_type || 'PAYMENT',
+    id: `manual-${item.id}`,
+    raw_id: item.id,
+    source: 'MANUAL_MOMO',
+    title:
+      item.status === 'PENDING_REVIEW'
+        ? 'MoMo Payment Awaiting Verification'
+        : item.status === 'REJECTED'
+          ? 'MoMo Payment Rejected'
+          : statusGroup === 'SUCCESSFUL'
+            ? 'MoMo Payment Confirmed'
+            : 'Manual MoMo Payment',
+    description:
+      item.status === 'PENDING_REVIEW'
+        ? 'Your payment reference has been submitted and is waiting for admin verification.'
+        : item.status === 'REJECTED'
+          ? item.rejection_reason || 'Your manual MoMo payment was rejected.'
+          : 'Manual MoMo payment record for your Fund Space contribution.',
+    amount: Number(item.total_amount_paid || 0),
+    service_fee: Number(item.service_fee || 0),
+    currency: 'GHS',
     status: item.status || 'PENDING',
-    direction: normalizeDirection(item.direction),
-    channel: item.channel || 'PAYMENT_GATEWAY',
-    provider: item.provider || 'PAYMENT_PROVIDER',
-    reference:
-      item.provider_reference || item.internal_reference || item.id.slice(0, 8),
-    internal_reference: item.internal_reference || item.id.slice(0, 8),
-    description: getProviderDescription(item),
+    status_group: statusGroup,
+    direction: 'OUTGOING',
+    channel: item.sender_network || 'MOMO',
+    reference: item.transaction_reference || item.id.slice(0, 8),
+    secondary_reference: item.payer_type || null,
+    fund_space_id: item.fund_space_id,
+    contribution_id: item.contribution_id,
     created_at: item.created_at,
+    action_href: getActionHref({
+      source: 'MANUAL_MOMO',
+      fund_space_id: item.fund_space_id,
+      contribution_id: item.contribution_id,
+    }),
+    action_label:
+      item.status === 'PENDING_REVIEW'
+        ? 'View Fund Space'
+        : item.status === 'REJECTED'
+          ? 'Resubmit Payment'
+          : 'View Details',
+    rejection_reason: item.rejection_reason,
   };
 }
 
-function isConfirmedSuccessful(record: ConfirmedRecord) {
-  return getStatusGroup(record.status) === 'SUCCESSFUL';
+function mapConfirmedRecord(item: TransactionRow): UserTransactionRecord {
+  const direction = normalizeDirection(item.direction);
+  const statusGroup = getStatusGroup(item.status);
+
+  const record = {
+    source: 'CONFIRMED' as const,
+    fund_space_id: item.fund_space_id,
+    contribution_id: item.contribution_id,
+  };
+
+  return {
+    id: `confirmed-${item.id}`,
+    raw_id: item.id,
+    source: 'CONFIRMED',
+    title: 'Confirmed TrustPoint Transaction',
+    description: item.note || 'Confirmed TrustPoint system transaction.',
+    amount: Number(item.amount || 0),
+    service_fee: null,
+    currency: item.currency || 'GHS',
+    status: item.status || 'PENDING',
+    status_group: statusGroup,
+    direction,
+    channel: item.channel || 'SYSTEM',
+    reference: item.payment_reference || item.id.slice(0, 8),
+    secondary_reference: item.type || null,
+    fund_space_id: item.fund_space_id,
+    contribution_id: item.contribution_id,
+    created_at: item.created_at,
+    action_href: getActionHref(record),
+    action_label: 'View Related Details',
+    rejection_reason: null,
+  };
+}
+
+function mapProviderRecord(item: PaymentTransactionRow): UserTransactionRecord {
+  const direction = normalizeDirection(item.direction);
+  const statusGroup = getStatusGroup(item.status);
+
+  const record = {
+    source: 'PROVIDER' as const,
+    fund_space_id: item.fund_space_id,
+    contribution_id: item.contribution_id,
+  };
+
+  return {
+    id: `provider-${item.id}`,
+    raw_id: item.id,
+    source: 'PROVIDER',
+    title: 'Payment Provider Attempt',
+    description: item.failure_reason || getProviderDescription(item),
+    amount: Number(item.amount || 0),
+    service_fee: item.fee_amount === null ? null : Number(item.fee_amount || 0),
+    currency: item.currency || 'GHS',
+    status: item.status || item.provider_status || 'PENDING',
+    status_group: statusGroup,
+    direction,
+    channel: item.channel || item.mobile_network || 'PAYMENT_GATEWAY',
+    reference: item.provider_reference || item.internal_reference || item.id.slice(0, 8),
+    secondary_reference: item.internal_reference || null,
+    fund_space_id: item.fund_space_id,
+    contribution_id: item.contribution_id,
+    created_at: item.created_at,
+    action_href: getActionHref(record),
+    action_label: 'View Related Details',
+    rejection_reason: item.failure_reason,
+  };
+}
+
+function itemMatchesSearch(item: UserTransactionRecord, search: string) {
+  if (!search.trim()) return true;
+
+  const value = search.trim().toLowerCase();
+
+  const haystack = [
+    item.id,
+    item.raw_id,
+    item.title,
+    item.description,
+    item.source,
+    item.status,
+    item.status_group,
+    item.direction,
+    item.channel,
+    item.reference,
+    item.secondary_reference,
+    item.rejection_reason,
+    item.amount,
+    item.currency,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return haystack.includes(value);
+}
+
+function calculateStats(records: UserTransactionRecord[]): Stats {
+  const manual = records.filter((item) => item.source === 'MANUAL_MOMO');
+  const confirmed = records.filter((item) => item.source === 'CONFIRMED');
+  const provider = records.filter((item) => item.source === 'PROVIDER');
+
+  const successful = records.filter((item) => item.status_group === 'SUCCESSFUL');
+  const pending = records.filter((item) => item.status_group === 'PENDING');
+  const failed = records.filter((item) => item.status_group === 'FAILED');
+
+  const successfulConfirmed = confirmed.filter(
+    (item) => item.status_group === 'SUCCESSFUL'
+  );
+
+  const confirmedCredits = successfulConfirmed.filter((item) =>
+    ['CREDIT', 'INCOMING'].includes(item.direction)
+  );
+
+  const confirmedDebits = successfulConfirmed.filter((item) =>
+    ['DEBIT', 'OUTGOING'].includes(item.direction)
+  );
+
+  return {
+    total: records.length,
+    manual_momo: manual.length,
+    awaiting_review: manual.filter((item) => item.status === 'PENDING_REVIEW')
+      .length,
+    confirmed: confirmed.length,
+    provider: provider.length,
+    successful: successful.length,
+    pending: pending.length,
+    failed: failed.length,
+    confirmed_value: successfulConfirmed.reduce(
+      (sum, item) => sum + Number(item.amount || 0),
+      0
+    ),
+    confirmed_credit_value: confirmedCredits.reduce(
+      (sum, item) => sum + Number(item.amount || 0),
+      0
+    ),
+    confirmed_debit_value: confirmedDebits.reduce(
+      (sum, item) => sum + Number(item.amount || 0),
+      0
+    ),
+  };
 }
 
 export default function UserTransactionsPage() {
   const { profile, loading } = useAuth();
 
-  const [confirmedRecords, setConfirmedRecords] = useState<ConfirmedRecord[]>(
-    []
-  );
-  const [providerRecords, setProviderRecords] = useState<ProviderRecord[]>([]);
-
+  const [records, setRecords] = useState<UserTransactionRecord[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  const [confirmedSearch, setConfirmedSearch] = useState('');
-  const [providerSearch, setProviderSearch] = useState('');
-
-  const [confirmedTypeFilter, setConfirmedTypeFilter] = useState('ALL');
-  const [providerTypeFilter, setProviderTypeFilter] = useState('ALL');
-
-  const [confirmedStatusFilter, setConfirmedStatusFilter] = useState<
-    'ALL' | StatusGroup
-  >('ALL');
-  const [providerStatusFilter, setProviderStatusFilter] = useState<
-    'ALL' | StatusGroup
-  >('ALL');
-
-  const [confirmedDirectionFilter, setConfirmedDirectionFilter] = useState<
-    'ALL' | Direction
-  >('ALL');
-  const [providerDirectionFilter, setProviderDirectionFilter] = useState<
-    'ALL' | Direction
-  >('ALL');
+  const [sourceFilter, setSourceFilter] = useState<RecordSource>('ALL');
+  const [statusFilter, setStatusFilter] = useState<StatusGroup>('ALL');
+  const [searchTerm, setSearchTerm] = useState('');
 
   const loadRecords = useCallback(
     async (userId: string, showRefreshState = false) => {
@@ -272,49 +561,106 @@ export default function UserTransactionsPage() {
 
         setErrorMessage('');
 
-        const [transactionResult, paymentResult] = await Promise.all([
-          supabase
-            .from('transactions')
-            .select('*')
-            .eq('user_id', userId)
-            .order('created_at', { ascending: false }),
+        /**
+         * Important:
+         * The project has had generated type mismatches around manual_payment_submissions.
+         * Casting the client here prevents false TypeScript .from() errors while still
+         * querying only the logged-in user's records.
+         */
+        const client = supabase as any;
 
-          supabase
-            .from('payment_transactions')
-            .select('*')
+        const [
+          manualPaymentResult,
+          transactionResult,
+          paymentTransactionResult,
+        ] = await Promise.all([
+          client
+            .from('manual_payment_submissions')
+            .select(
+              'id, agent_id, amount_due, company_payment_account_id, contribution_id, created_at, fund_space_id, payer_relationship, payer_type, payment_note, rejection_reason, reviewed_at, reviewed_by, round_id, sender_name, sender_network, sender_phone, service_fee, status, submitted_by, submitted_by_role, total_amount_paid, transaction_reference, user_id'
+            )
+            .or(
+              `user_id.eq.${userId},submitted_by.eq.${userId},agent_id.eq.${userId}`
+            )
+            .order('created_at', { ascending: false })
+            .limit(300),
+
+          client
+            .from('transactions')
+            .select(
+              'id, amount, channel, contribution_id, created_at, created_by, currency, direction, fund_space_id, fund_space_round_id, metadata, note, payment_reference, payout_id, savings_plan_id, status, type, user_id, wallet_id, withdrawal_request_id'
+            )
             .eq('user_id', userId)
-            .order('created_at', { ascending: false }),
+            .order('created_at', { ascending: false })
+            .limit(300),
+
+          client
+            .from('payment_transactions')
+            .select(
+              'id, agent_id, amount, channel, contribution_id, created_at, currency, customer_id, direction, failure_reason, fee_amount, fund_space_id, fund_space_round_id, initiated_by, internal_reference, mobile_network, payer_name, payer_phone, payment_type, provider, provider_reference, provider_status, status, user_id'
+            )
+            .or(
+              `user_id.eq.${userId},customer_id.eq.${userId},initiated_by.eq.${userId},agent_id.eq.${userId}`
+            )
+            .order('created_at', { ascending: false })
+            .limit(300),
         ]);
+
+        if (manualPaymentResult.error) {
+          throw new Error(
+            manualPaymentResult.error.message ||
+              'Unable to load manual MoMo payment records.'
+          );
+        }
 
         if (transactionResult.error) {
           throw new Error(
             transactionResult.error.message ||
-              'Unable to load confirmed transactions.'
+              'Unable to load confirmed transaction records.'
           );
         }
 
-        if (paymentResult.error) {
+        if (paymentTransactionResult.error) {
           throw new Error(
-            paymentResult.error.message || 'Unable to load payment attempts.'
+            paymentTransactionResult.error.message ||
+              'Unable to load payment provider records.'
           );
         }
 
-        setConfirmedRecords(
-          (transactionResult.data || []).map(mapConfirmedRecord)
-        );
+        const manualRecords = (
+          (manualPaymentResult.data || []) as ManualPaymentSubmissionRow[]
+        ).map(mapManualRecord);
 
-        setProviderRecords((paymentResult.data || []).map(mapProviderRecord));
+        const confirmedRecords = (
+          (transactionResult.data || []) as TransactionRow[]
+        ).map(mapConfirmedRecord);
+
+        const providerRecords = (
+          (paymentTransactionResult.data || []) as PaymentTransactionRow[]
+        ).map(mapProviderRecord);
+
+        const combined = [
+          ...manualRecords,
+          ...confirmedRecords,
+          ...providerRecords,
+        ].sort((a, b) => {
+          const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+          const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+
+          return bTime - aTime;
+        });
+
+        setRecords(combined);
       } catch (error) {
         console.error('User transactions load error:', error);
 
-        const message =
+        setErrorMessage(
           error instanceof Error
             ? error.message
-            : 'Unable to load transactions.';
+            : 'Unable to load your transaction records.'
+        );
 
-        setErrorMessage(message);
-        setConfirmedRecords([]);
-        setProviderRecords([]);
+        setRecords([]);
       } finally {
         setPageLoading(false);
         setRefreshing(false);
@@ -335,167 +681,31 @@ export default function UserTransactionsPage() {
     loadRecords(profile.id);
   }, [loading, profile?.id, loadRecords]);
 
-  const confirmedStats = useMemo(() => {
-    const successful = confirmedRecords.filter(isConfirmedSuccessful);
+  const stats = useMemo(() => calculateStats(records), [records]);
 
-    const pending = confirmedRecords.filter(
-      (item) => getStatusGroup(item.status) === 'PENDING'
-    );
+  const filteredRecords = useMemo(() => {
+    return records
+      .filter((item) => sourceFilter === 'ALL' || item.source === sourceFilter)
+      .filter(
+        (item) => statusFilter === 'ALL' || item.status_group === statusFilter
+      )
+      .filter((item) => itemMatchesSearch(item, searchTerm));
+  }, [records, sourceFilter, statusFilter, searchTerm]);
 
-    const failed = confirmedRecords.filter(
-      (item) => getStatusGroup(item.status) === 'FAILED'
-    );
-
-    const credits = confirmedRecords.filter((item) =>
-      ['CREDIT', 'INCOMING'].includes(item.direction)
-    );
-
-    const debits = confirmedRecords.filter((item) =>
-      ['DEBIT', 'OUTGOING'].includes(item.direction)
-    );
-
-    const successfulCredits = successful.filter((item) =>
-      ['CREDIT', 'INCOMING'].includes(item.direction)
-    );
-
-    const successfulDebits = successful.filter((item) =>
-      ['DEBIT', 'OUTGOING'].includes(item.direction)
-    );
-
-    return {
-      total: confirmedRecords.length,
-      successful: successful.length,
-      pending: pending.length,
-      failed: failed.length,
-      successfulValue: successful.reduce(
-        (sum, item) => sum + Number(item.amount || 0),
-        0
-      ),
-      successfulCreditValue: successfulCredits.reduce(
-        (sum, item) => sum + Number(item.amount || 0),
-        0
-      ),
-      successfulDebitValue: successfulDebits.reduce(
-        (sum, item) => sum + Number(item.amount || 0),
-        0
-      ),
-      creditCount: credits.length,
-      debitCount: debits.length,
-    };
-  }, [confirmedRecords]);
-
-  const providerStats = useMemo(() => {
-    const successful = providerRecords.filter(
-      (item) => getStatusGroup(item.status) === 'SUCCESSFUL'
-    );
-
-    const pending = providerRecords.filter(
-      (item) => getStatusGroup(item.status) === 'PENDING'
-    );
-
-    const failed = providerRecords.filter(
-      (item) => getStatusGroup(item.status) === 'FAILED'
-    );
-
-    return {
-      total: providerRecords.length,
-      successful: successful.length,
-      pending: pending.length,
-      failed: failed.length,
-    };
-  }, [providerRecords]);
-
-  const confirmedTypes = useMemo(() => {
-    return Array.from(
-      new Set(confirmedRecords.map((item) => item.type).filter(Boolean))
-    ).sort();
-  }, [confirmedRecords]);
-
-  const providerTypes = useMemo(() => {
-    return Array.from(
-      new Set(providerRecords.map((item) => item.type).filter(Boolean))
-    ).sort();
-  }, [providerRecords]);
-
-  const filteredConfirmedRecords = useMemo(() => {
-    const searchValue = confirmedSearch.trim().toLowerCase();
-
-    return confirmedRecords.filter((item) => {
-      const statusGroup = getStatusGroup(item.status);
-
-      const matchesSearch =
-        !searchValue ||
-        item.id.toLowerCase().includes(searchValue) ||
-        item.type.toLowerCase().includes(searchValue) ||
-        item.status.toLowerCase().includes(searchValue) ||
-        String(item.amount).includes(confirmedSearch.trim()) ||
-        item.reference.toLowerCase().includes(searchValue) ||
-        item.description.toLowerCase().includes(searchValue);
-
-      const matchesType =
-        confirmedTypeFilter === 'ALL' || item.type === confirmedTypeFilter;
-
-      const matchesStatus =
-        confirmedStatusFilter === 'ALL' ||
-        statusGroup === confirmedStatusFilter;
-
-      const matchesDirection =
-        confirmedDirectionFilter === 'ALL' ||
-        item.direction === confirmedDirectionFilter;
-
-      return matchesSearch && matchesType && matchesStatus && matchesDirection;
-    });
-  }, [
-    confirmedRecords,
-    confirmedSearch,
-    confirmedTypeFilter,
-    confirmedStatusFilter,
-    confirmedDirectionFilter,
-  ]);
-
-  const filteredProviderRecords = useMemo(() => {
-    const searchValue = providerSearch.trim().toLowerCase();
-
-    return providerRecords.filter((item) => {
-      const statusGroup = getStatusGroup(item.status);
-
-      const matchesSearch =
-        !searchValue ||
-        item.id.toLowerCase().includes(searchValue) ||
-        item.type.toLowerCase().includes(searchValue) ||
-        item.status.toLowerCase().includes(searchValue) ||
-        String(item.amount).includes(providerSearch.trim()) ||
-        item.reference.toLowerCase().includes(searchValue) ||
-        item.internal_reference.toLowerCase().includes(searchValue) ||
-        item.provider.toLowerCase().includes(searchValue) ||
-        item.description.toLowerCase().includes(searchValue);
-
-      const matchesType =
-        providerTypeFilter === 'ALL' || item.type === providerTypeFilter;
-
-      const matchesStatus =
-        providerStatusFilter === 'ALL' || statusGroup === providerStatusFilter;
-
-      const matchesDirection =
-        providerDirectionFilter === 'ALL' ||
-        item.direction === providerDirectionFilter;
-
-      return matchesSearch && matchesType && matchesStatus && matchesDirection;
-    });
-  }, [
-    providerRecords,
-    providerSearch,
-    providerTypeFilter,
-    providerStatusFilter,
-    providerDirectionFilter,
-  ]);
+  function clearFilters() {
+    setSourceFilter('ALL');
+    setStatusFilter('ALL');
+    setSearchTerm('');
+  }
 
   if (loading || pageLoading) {
     return (
       <div className="flex min-h-[70vh] items-center justify-center px-4">
         <div className="text-center">
           <Loader2 className="mx-auto mb-4 h-10 w-10 animate-spin text-emerald-600" />
-          <p className="text-sm text-gray-500">Loading transactions...</p>
+          <p className="text-sm font-semibold text-gray-500">
+            Loading your transaction records...
+          </p>
         </div>
       </div>
     );
@@ -505,42 +715,36 @@ export default function UserTransactionsPage() {
     <div className="space-y-8">
       <div className="rounded-3xl bg-gradient-to-r from-emerald-700 via-emerald-600 to-teal-600 p-6 text-white shadow-sm md:p-8">
         <div className="flex flex-col justify-between gap-6 xl:flex-row xl:items-center">
-          <div>
-            <p className="mb-3 inline-flex rounded-full bg-white/15 px-4 py-1 text-sm font-medium">
-              My Financial Records
+          <div className="max-w-4xl">
+            <p className="mb-3 inline-flex rounded-full bg-white/15 px-4 py-1 text-sm font-semibold">
+              My Transaction Center
             </p>
 
-            <h1 className="text-3xl font-black md:text-4xl">Transactions</h1>
+            <h1 className="text-3xl font-black md:text-4xl">
+              My transaction records
+            </h1>
 
             <p className="mt-4 max-w-3xl text-sm leading-7 text-emerald-50 md:text-base">
-              Confirmed system transactions show money that has actually been
-              processed by TrustPoint. Provider attempts show Paystack/payment
-              gateway status only and are not added to your financial totals.
+              View all transaction records connected to your account, including
+              manual MoMo submissions, confirmed TrustPoint system transactions,
+              and payment provider attempts.
             </p>
 
             <div className="mt-6 flex flex-wrap gap-3">
               <Link
-                href="/dashboard/deposit"
+                href="/dashboard/fund-space"
                 className="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-emerald-700 hover:bg-emerald-50"
               >
-                Deposit
-                <ArrowRight size={16} />
+                My Fund Space
+                <ArrowRight className="h-4 w-4" />
               </Link>
 
               <Link
-                href="/dashboard/withdrawals"
+                href="/dashboard/notifications"
                 className="inline-flex items-center gap-2 rounded-xl bg-white/15 px-5 py-3 text-sm font-bold text-white ring-1 ring-white/20 hover:bg-white/20"
               >
-                Withdrawals
-                <ArrowRight size={16} />
-              </Link>
-
-              <Link
-                href="/dashboard/fund-space"
-                className="inline-flex items-center gap-2 rounded-xl bg-white/15 px-5 py-3 text-sm font-bold text-white ring-1 ring-white/20 hover:bg-white/20"
-              >
-                Fund Space
-                <ArrowRight size={16} />
+                Notifications
+                <ArrowRight className="h-4 w-4" />
               </Link>
             </div>
           </div>
@@ -549,11 +753,10 @@ export default function UserTransactionsPage() {
             type="button"
             onClick={() => profile?.id && loadRecords(profile.id, true)}
             disabled={refreshing}
-            className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex min-h-12 w-fit items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <RefreshCw
-              size={16}
-              className={refreshing ? 'animate-spin' : ''}
+              className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`}
             />
             Refresh
           </button>
@@ -563,717 +766,469 @@ export default function UserTransactionsPage() {
       {errorMessage && (
         <div className="flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm font-semibold text-red-700">
           <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
-          <span>{errorMessage}</span>
+          <p>{errorMessage}</p>
         </div>
       )}
 
-      <section className="space-y-5">
-        <div>
-          <h2 className="text-xl font-black text-gray-900">
-            Confirmed Money Movement
-          </h2>
-          <p className="mt-1 text-sm text-gray-500">
-            These figures are calculated from confirmed TrustPoint system
-            transactions only. Provider attempts are excluded to prevent double
-            counting.
-          </p>
-        </div>
+      <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+        <StatButton
+          title="All Records"
+          value={stats.total}
+          description="Everything related to your account"
+          icon={<Wallet className="h-5 w-5" />}
+          active={sourceFilter === 'ALL' && statusFilter === 'ALL'}
+          onClick={() => {
+            setSourceFilter('ALL');
+            setStatusFilter('ALL');
+          }}
+        />
 
-        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-          <ValueCard
-            title="Successful Confirmed Value"
-            value={confirmedStats.successfulValue}
-            variant="emerald"
-            note="Only successful system transactions"
-          />
-          <ValueCard
-            title="Confirmed Credits"
-            value={confirmedStats.successfulCreditValue}
-            variant="blue"
-            note="Money added to your wallet/account"
-          />
-          <ValueCard
-            title="Confirmed Debits"
-            value={confirmedStats.successfulDebitValue}
-            variant="red"
-            note="Money paid out, withdrawn, or contributed"
-          />
-          <StatCard
-            title="Confirmed Records"
-            value={confirmedStats.total}
-            icon={<Wallet size={24} />}
-            color="emerald"
-            note={`${confirmedStats.successful} successful, ${confirmedStats.pending} pending`}
-          />
-        </div>
-      </section>
+        <StatButton
+          title="Manual MoMo"
+          value={stats.manual_momo}
+          description="Your submitted MoMo references"
+          icon={<Smartphone className="h-5 w-5" />}
+          active={sourceFilter === 'MANUAL_MOMO'}
+          onClick={() => {
+            setSourceFilter('MANUAL_MOMO');
+            setStatusFilter('ALL');
+          }}
+        />
 
-      <section className="space-y-5">
-        <div>
-          <h2 className="text-xl font-black text-gray-900">
-            Payment Provider Attempts
-          </h2>
-          <p className="mt-1 text-sm text-gray-500">
-            These are Paystack/payment gateway attempts. They are displayed for
-            tracking, but they are not added to the money totals above.
-          </p>
-        </div>
+        <StatButton
+          title="Awaiting Verification"
+          value={stats.awaiting_review}
+          description="MoMo references pending admin review"
+          icon={<Clock className="h-5 w-5" />}
+          active={
+            sourceFilter === 'MANUAL_MOMO' && statusFilter === 'PENDING'
+          }
+          onClick={() => {
+            setSourceFilter('MANUAL_MOMO');
+            setStatusFilter('PENDING');
+          }}
+        />
 
-        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-          <StatCard
-            title="Provider Attempts"
-            value={providerStats.total}
-            icon={<CreditCard size={24} />}
-            color="blue"
-          />
-          <StatCard
-            title="Provider Successful"
-            value={providerStats.successful}
-            icon={<CheckCircle2 size={24} />}
-            color="green"
-          />
-          <StatCard
-            title="Provider Pending"
-            value={providerStats.pending}
-            icon={<Clock size={24} />}
-            color="amber"
-          />
-          <StatCard
-            title="Provider Failed"
-            value={providerStats.failed}
-            icon={<XCircle size={24} />}
-            color="red"
-          />
-        </div>
+        <StatButton
+          title="Confirmed Records"
+          value={stats.confirmed}
+          description="Real TrustPoint system transactions"
+          icon={<CheckCircle2 className="h-5 w-5" />}
+          active={sourceFilter === 'CONFIRMED'}
+          onClick={() => {
+            setSourceFilter('CONFIRMED');
+            setStatusFilter('ALL');
+          }}
+        />
+
+        <ValueButton
+          title="Confirmed Value"
+          value={stats.confirmed_value}
+          description="Successful confirmed system records only"
+          active={
+            sourceFilter === 'CONFIRMED' && statusFilter === 'SUCCESSFUL'
+          }
+          onClick={() => {
+            setSourceFilter('CONFIRMED');
+            setStatusFilter('SUCCESSFUL');
+          }}
+        />
+
+        <ValueButton
+          title="Confirmed Credits"
+          value={stats.confirmed_credit_value}
+          description="Money credited to you"
+          active={false}
+          onClick={() => {
+            setSourceFilter('CONFIRMED');
+            setStatusFilter('SUCCESSFUL');
+          }}
+        />
+
+        <ValueButton
+          title="Confirmed Debits"
+          value={stats.confirmed_debit_value}
+          description="Money paid out, contributed, or withdrawn"
+          active={false}
+          onClick={() => {
+            setSourceFilter('CONFIRMED');
+            setStatusFilter('SUCCESSFUL');
+          }}
+        />
+
+        <StatButton
+          title="Provider Attempts"
+          value={stats.provider}
+          description="Payment gateway tracking records"
+          icon={<CreditCard className="h-5 w-5" />}
+          active={sourceFilter === 'PROVIDER'}
+          onClick={() => {
+            setSourceFilter('PROVIDER');
+            setStatusFilter('ALL');
+          }}
+        />
       </section>
 
       <div className="rounded-3xl border border-emerald-100 bg-emerald-50 p-5 md:p-6">
-        <h2 className="text-lg font-bold text-emerald-800">
-          How to read this page
-        </h2>
-
-        <div className="mt-3 grid gap-3 text-sm leading-6 text-emerald-700 md:grid-cols-2">
-          <p>
-            <strong>Confirmed Money Movement</strong> is the real financial
-            record. These values come from the TrustPoint `transactions` table
-            after the system confirms payment, contribution, payout, or
-            withdrawal.
-          </p>
-
-          <p>
-            <strong>Payment Provider Attempts</strong> show Paystack/payment
-            gateway attempts. A successful provider attempt may also create a
-            confirmed system transaction, so it is not included in the money
-            totals to avoid double counting.
-          </p>
+        <div className="flex gap-3">
+          <Info className="mt-1 h-5 w-5 shrink-0 text-emerald-700" />
+          <div>
+            <h2 className="text-lg font-black text-emerald-900">
+              How to read this page
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-emerald-800">
+              Manual MoMo records show references you submitted for admin
+              verification. Confirmed records are the real TrustPoint system
+              transactions and should be used for financial totals. Provider
+              attempts are payment gateway tracking records and are shown for
+              transparency, but they should not be added again to confirmed
+              totals.
+            </p>
+          </div>
         </div>
       </div>
 
-      <ConfirmedRecordsSection
-        records={filteredConfirmedRecords}
-        allRecordsCount={confirmedRecords.length}
-        search={confirmedSearch}
-        setSearch={setConfirmedSearch}
-        typeFilter={confirmedTypeFilter}
-        setTypeFilter={setConfirmedTypeFilter}
-        statusFilter={confirmedStatusFilter}
-        setStatusFilter={setConfirmedStatusFilter}
-        directionFilter={confirmedDirectionFilter}
-        setDirectionFilter={setConfirmedDirectionFilter}
-        types={confirmedTypes}
-        clearFilters={() => {
-          setConfirmedSearch('');
-          setConfirmedTypeFilter('ALL');
-          setConfirmedStatusFilter('ALL');
-          setConfirmedDirectionFilter('ALL');
-        }}
-      />
-
-      <ProviderRecordsSection
-        records={filteredProviderRecords}
-        allRecordsCount={providerRecords.length}
-        search={providerSearch}
-        setSearch={setProviderSearch}
-        typeFilter={providerTypeFilter}
-        setTypeFilter={setProviderTypeFilter}
-        statusFilter={providerStatusFilter}
-        setStatusFilter={setProviderStatusFilter}
-        directionFilter={providerDirectionFilter}
-        setDirectionFilter={setProviderDirectionFilter}
-        types={providerTypes}
-        clearFilters={() => {
-          setProviderSearch('');
-          setProviderTypeFilter('ALL');
-          setProviderStatusFilter('ALL');
-          setProviderDirectionFilter('ALL');
-        }}
-      />
-    </div>
-  );
-}
-
-function ConfirmedRecordsSection({
-  records,
-  allRecordsCount,
-  search,
-  setSearch,
-  typeFilter,
-  setTypeFilter,
-  statusFilter,
-  setStatusFilter,
-  directionFilter,
-  setDirectionFilter,
-  types,
-  clearFilters,
-}: {
-  records: ConfirmedRecord[];
-  allRecordsCount: number;
-  search: string;
-  setSearch: (value: string) => void;
-  typeFilter: string;
-  setTypeFilter: (value: string) => void;
-  statusFilter: 'ALL' | StatusGroup;
-  setStatusFilter: (value: 'ALL' | StatusGroup) => void;
-  directionFilter: 'ALL' | Direction;
-  setDirectionFilter: (value: 'ALL' | Direction) => void;
-  types: string[];
-  clearFilters: () => void;
-}) {
-  return (
-    <section className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm md:p-6">
-      <RecordsHeader
-        title="Confirmed System Transactions"
-        description="Real TrustPoint records after payment/contribution/payout/withdrawal is confirmed."
-        search={search}
-        setSearch={setSearch}
-        typeFilter={typeFilter}
-        setTypeFilter={setTypeFilter}
-        statusFilter={statusFilter}
-        setStatusFilter={setStatusFilter}
-        directionFilter={directionFilter}
-        setDirectionFilter={setDirectionFilter}
-        types={types}
-      />
-
-      <div className="mt-6 space-y-4 lg:hidden">
-        {records.length === 0 ? (
-          <EmptyState message="No confirmed system transactions found." />
-        ) : (
-          records.map((item) => (
-            <ConfirmedRecordCard key={item.id} item={item} />
-          ))
-        )}
-      </div>
-
-      <div className="mt-6 hidden overflow-hidden rounded-2xl border border-gray-100 lg:block">
-        {records.length === 0 ? (
-          <EmptyState message="No confirmed system transactions found." />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1050px] text-left">
-              <thead className="bg-gray-50">
-                <tr>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Direction</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Reference</TableHead>
-                  <TableHead>Channel</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Date</TableHead>
-                </tr>
-              </thead>
-
-              <tbody className="divide-y divide-gray-100 bg-white">
-                {records.map((item) => (
-                  <ConfirmedRecordRow key={item.id} item={item} />
-                ))}
-              </tbody>
-            </table>
+      <section className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <h2 className="text-xl font-black text-gray-900">
+              Transaction Records
+            </h2>
+            <p className="mt-1 text-sm text-gray-500">
+              Showing {filteredRecords.length} of {records.length} records.
+            </p>
           </div>
-        )}
-      </div>
 
-      <RecordFooter
-        shown={records.length}
-        total={allRecordsCount}
-        clearFilters={clearFilters}
-      />
-    </section>
-  );
-}
+          <div className="grid gap-3 md:grid-cols-3 xl:min-w-[760px]">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
 
-function ProviderRecordsSection({
-  records,
-  allRecordsCount,
-  search,
-  setSearch,
-  typeFilter,
-  setTypeFilter,
-  statusFilter,
-  setStatusFilter,
-  directionFilter,
-  setDirectionFilter,
-  types,
-  clearFilters,
-}: {
-  records: ProviderRecord[];
-  allRecordsCount: number;
-  search: string;
-  setSearch: (value: string) => void;
-  typeFilter: string;
-  setTypeFilter: (value: string) => void;
-  statusFilter: 'ALL' | StatusGroup;
-  setStatusFilter: (value: 'ALL' | StatusGroup) => void;
-  directionFilter: 'ALL' | Direction;
-  setDirectionFilter: (value: 'ALL' | Direction) => void;
-  types: string[];
-  clearFilters: () => void;
-}) {
-  return (
-    <section className="rounded-3xl border border-blue-100 bg-white p-5 shadow-sm md:p-6">
-      <RecordsHeader
-        title="Payment Provider Attempts"
-        description="Paystack/payment gateway attempts for tracking only. These are not counted as extra financial value."
-        search={search}
-        setSearch={setSearch}
-        typeFilter={typeFilter}
-        setTypeFilter={setTypeFilter}
-        statusFilter={statusFilter}
-        setStatusFilter={setStatusFilter}
-        directionFilter={directionFilter}
-        setDirectionFilter={setDirectionFilter}
-        types={types}
-      />
+              <input
+                type="text"
+                placeholder="Search reference, status, amount..."
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                className="min-h-12 w-full rounded-xl border border-gray-200 py-3 pl-10 pr-4 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              />
+            </div>
 
-      <div className="mt-6 space-y-4 lg:hidden">
-        {records.length === 0 ? (
-          <EmptyState message="No payment provider attempts found." />
-        ) : (
-          records.map((item) => (
-            <ProviderRecordCard key={item.id} item={item} />
-          ))
-        )}
-      </div>
+            <select
+              value={sourceFilter}
+              onChange={(event) =>
+                setSourceFilter(event.target.value as RecordSource)
+              }
+              className="min-h-12 rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+            >
+              <option value="ALL">All Sources</option>
+              <option value="MANUAL_MOMO">Manual MoMo</option>
+              <option value="CONFIRMED">Confirmed System Records</option>
+              <option value="PROVIDER">Provider Attempts</option>
+            </select>
 
-      <div className="mt-6 hidden overflow-hidden rounded-2xl border border-gray-100 lg:block">
-        {records.length === 0 ? (
-          <EmptyState message="No payment provider attempts found." />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1120px] text-left">
-              <thead className="bg-gray-50">
-                <tr>
-                  <TableHead>Payment Type</TableHead>
-                  <TableHead>Provider</TableHead>
-                  <TableHead>Direction</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Provider Reference</TableHead>
-                  <TableHead>Internal Reference</TableHead>
-                  <TableHead>Date</TableHead>
-                </tr>
-              </thead>
-
-              <tbody className="divide-y divide-gray-100 bg-white">
-                {records.map((item) => (
-                  <ProviderRecordRow key={item.id} item={item} />
-                ))}
-              </tbody>
-            </table>
+            <select
+              value={statusFilter}
+              onChange={(event) =>
+                setStatusFilter(event.target.value as StatusGroup)
+              }
+              className="min-h-12 rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+            >
+              <option value="ALL">All Statuses</option>
+              <option value="SUCCESSFUL">Successful</option>
+              <option value="PENDING">Pending</option>
+              <option value="FAILED">Failed / Rejected</option>
+              <option value="OTHER">Other</option>
+            </select>
           </div>
-        )}
-      </div>
-
-      <RecordFooter
-        shown={records.length}
-        total={allRecordsCount}
-        clearFilters={clearFilters}
-      />
-    </section>
-  );
-}
-
-function RecordsHeader({
-  title,
-  description,
-  search,
-  setSearch,
-  typeFilter,
-  setTypeFilter,
-  statusFilter,
-  setStatusFilter,
-  directionFilter,
-  setDirectionFilter,
-  types,
-}: {
-  title: string;
-  description: string;
-  search: string;
-  setSearch: (value: string) => void;
-  typeFilter: string;
-  setTypeFilter: (value: string) => void;
-  statusFilter: 'ALL' | StatusGroup;
-  setStatusFilter: (value: 'ALL' | StatusGroup) => void;
-  directionFilter: 'ALL' | Direction;
-  setDirectionFilter: (value: 'ALL' | Direction) => void;
-  types: string[];
-}) {
-  return (
-    <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-      <div>
-        <h2 className="text-xl font-black text-gray-900">{title}</h2>
-        <p className="mt-1 text-sm text-gray-500">{description}</p>
-      </div>
-
-      <div className="grid gap-3 md:grid-cols-4 xl:min-w-[860px]">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-
-          <input
-            type="text"
-            placeholder="Search reference, amount..."
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            className="min-h-12 w-full rounded-xl border border-gray-200 py-3 pl-10 pr-4 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-          />
         </div>
 
-        <select
-          value={typeFilter}
-          onChange={(event) => setTypeFilter(event.target.value)}
-          className="min-h-12 rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-        >
-          <option value="ALL">All Types</option>
-          {types.map((type) => (
-            <option key={type} value={type}>
-              {formatLabel(type)}
-            </option>
+        <div className="mt-5 flex flex-wrap gap-2">
+          {(
+            [
+              ['ALL', 'All'],
+              ['MANUAL_MOMO', 'Manual MoMo'],
+              ['CONFIRMED', 'Confirmed'],
+              ['PROVIDER', 'Provider'],
+            ] as [RecordSource, string][]
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setSourceFilter(value)}
+              className={`rounded-xl px-4 py-2.5 text-sm font-black transition ${
+                sourceFilter === value
+                  ? 'bg-emerald-600 text-white shadow-sm hover:bg-emerald-700'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              {label}
+            </button>
           ))}
-        </select>
 
-        <select
-          value={statusFilter}
-          onChange={(event) =>
-            setStatusFilter(event.target.value as 'ALL' | StatusGroup)
-          }
-          className="min-h-12 rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-        >
-          <option value="ALL">All Statuses</option>
-          <option value="SUCCESSFUL">Successful</option>
-          <option value="PENDING">Pending</option>
-          <option value="FAILED">Failed / Rejected</option>
-          <option value="OTHER">Other</option>
-        </select>
+          {(
+            [
+              ['ALL', 'All Status'],
+              ['SUCCESSFUL', 'Successful'],
+              ['PENDING', 'Pending'],
+              ['FAILED', 'Failed'],
+            ] as [StatusGroup, string][]
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setStatusFilter(value)}
+              className={`rounded-xl px-4 py-2.5 text-sm font-black transition ${
+                statusFilter === value
+                  ? 'bg-gray-900 text-white shadow-sm hover:bg-gray-800'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
 
-        <select
-          value={directionFilter}
-          onChange={(event) =>
-            setDirectionFilter(event.target.value as 'ALL' | Direction)
-          }
-          className="min-h-12 rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-        >
-          <option value="ALL">All Directions</option>
-          <option value="CREDIT">Credits</option>
-          <option value="DEBIT">Debits</option>
-          <option value="INCOMING">Incoming</option>
-          <option value="OUTGOING">Outgoing</option>
-          <option value="NEUTRAL">Neutral</option>
-        </select>
-      </div>
-    </div>
-  );
-}
-
-function ConfirmedRecordCard({ item }: { item: ConfirmedRecord }) {
-  return (
-    <div className="rounded-3xl border border-gray-100 bg-white p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm text-gray-500">{formatLabel(item.type)}</p>
-          <p className="text-2xl font-black text-gray-900">
-            {formatCurrency(item.amount)}
-          </p>
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-black text-gray-700 transition hover:bg-gray-50"
+          >
+            Clear Filters
+          </button>
         </div>
+      </section>
 
-        <StatusBadge status={item.status} />
-      </div>
+      <section className="rounded-3xl border border-gray-100 bg-white shadow-sm">
+        {filteredRecords.length === 0 ? (
+          <EmptyState />
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {filteredRecords.map((record) => (
+              <Link
+                key={record.id}
+                href={record.action_href}
+                className="group block p-5 transition hover:bg-emerald-50/40 md:p-6"
+              >
+                <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+                  <div className="flex min-w-0 flex-1 gap-4">
+                    <div
+                      className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border ${getSourceStyle(
+                        record.source
+                      )}`}
+                    >
+                      {getSourceIcon(record.source)}
+                    </div>
 
-      <div className="mt-3">
-        <DirectionBadge direction={item.direction} />
-      </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-lg font-black text-gray-900 group-hover:text-emerald-800">
+                          {record.title}
+                        </h3>
 
-      <div className="mt-4 rounded-2xl bg-gray-50 p-4 text-sm">
-        <p className="font-semibold text-gray-900">{item.description}</p>
-        <p className="mt-1 break-all text-xs text-gray-500">
-          Reference: {item.reference}
-        </p>
-        <p className="mt-1 text-xs text-gray-500">Channel: {item.channel}</p>
-        <p className="mt-1 text-xs text-gray-500">
-          Date: {formatDateTime(item.created_at)}
-        </p>
-      </div>
+                        <span
+                          className={`rounded-full border px-3 py-1 text-xs font-black ${getSourceStyle(
+                            record.source
+                          )}`}
+                        >
+                          {formatLabel(record.source)}
+                        </span>
+
+                        <span
+                          className={`rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
+                            record.status_group
+                          )}`}
+                        >
+                          {formatLabel(record.status)}
+                        </span>
+
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-black ${getDirectionStyle(
+                            record.direction
+                          )}`}
+                        >
+                          {getDirectionIcon(record.direction)}
+                          {formatLabel(record.direction)}
+                        </span>
+                      </div>
+
+                      <p className="mt-2 text-sm leading-6 text-gray-600">
+                        {record.description}
+                      </p>
+
+                      <div className="mt-4 grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-4">
+                        <div className="rounded-2xl bg-gray-50 p-4">
+                          <p className="text-xs font-bold uppercase text-gray-400">
+                            Amount
+                          </p>
+                          <p className="mt-1 text-lg font-black text-gray-900">
+                            {formatCurrency(record.amount)}
+                          </p>
+                          {record.service_fee !== null && (
+                            <p className="text-xs text-gray-500">
+                              Fee: {formatCurrency(record.service_fee)}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="rounded-2xl bg-gray-50 p-4">
+                          <p className="text-xs font-bold uppercase text-gray-400">
+                            Reference
+                          </p>
+                          <p className="mt-1 break-all font-black text-gray-900">
+                            {record.reference || 'Not provided'}
+                          </p>
+                          {record.secondary_reference && (
+                            <p className="text-xs text-gray-500">
+                              {formatLabel(record.secondary_reference)}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="rounded-2xl bg-gray-50 p-4">
+                          <p className="text-xs font-bold uppercase text-gray-400">
+                            Channel
+                          </p>
+                          <p className="mt-1 font-black text-gray-900">
+                            {formatLabel(record.channel)}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {record.currency || 'GHS'}
+                          </p>
+                        </div>
+
+                        <div className="rounded-2xl bg-gray-50 p-4">
+                          <p className="text-xs font-bold uppercase text-gray-400">
+                            Date
+                          </p>
+                          <p className="mt-1 font-black text-gray-900">
+                            {formatDateTime(record.created_at)}
+                          </p>
+                        </div>
+                      </div>
+
+                      {record.rejection_reason && (
+                        <div className="mt-4 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">
+                          <p className="font-black">
+                            Failure / rejection reason
+                          </p>
+                          <p className="mt-1 leading-6">
+                            {record.rejection_reason}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-2">
+                    {record.source === 'MANUAL_MOMO' && (
+                      <span className="inline-flex items-center gap-2 rounded-xl border border-emerald-100 bg-white px-4 py-2 text-sm font-black text-emerald-700">
+                        <FileCheck2 className="h-4 w-4" />
+                        MoMo
+                      </span>
+                    )}
+
+                    <span className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-black text-white group-hover:bg-emerald-700">
+                      {record.action_label}
+                      <Eye className="h-4 w-4" />
+                    </span>
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
 
-function ProviderRecordCard({ item }: { item: ProviderRecord }) {
-  return (
-    <div className="rounded-3xl border border-blue-100 bg-white p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm text-gray-500">{formatLabel(item.type)}</p>
-          <p className="text-2xl font-black text-gray-900">
-            {formatCurrency(item.amount)}
-          </p>
-        </div>
-
-        <StatusBadge status={item.status} />
-      </div>
-
-      <div className="mt-3 flex flex-wrap gap-2">
-        <DirectionBadge direction={item.direction} />
-        <ProviderBadge provider={item.provider} />
-      </div>
-
-      <div className="mt-4 rounded-2xl bg-blue-50 p-4 text-sm">
-        <p className="font-semibold text-blue-900">{item.description}</p>
-        <p className="mt-1 break-all text-xs text-blue-700">
-          Provider Ref: {item.reference}
-        </p>
-        <p className="mt-1 break-all text-xs text-blue-700">
-          Internal Ref: {item.internal_reference}
-        </p>
-        <p className="mt-1 text-xs text-blue-700">
-          Date: {formatDateTime(item.created_at)}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function ConfirmedRecordRow({ item }: { item: ConfirmedRecord }) {
-  return (
-    <tr className="hover:bg-gray-50">
-      <td className="px-5 py-5">
-        <p className="font-bold text-gray-900">{formatLabel(item.type)}</p>
-      </td>
-
-      <td className="px-5 py-5">
-        <DirectionBadge direction={item.direction} />
-      </td>
-
-      <td className="px-5 py-5">
-        <p className="font-black text-gray-900">
-          {formatCurrency(item.amount)}
-        </p>
-      </td>
-
-      <td className="px-5 py-5">
-        <StatusBadge status={item.status} />
-      </td>
-
-      <td className="max-w-[200px] break-all px-5 py-5 text-sm text-gray-700">
-        {item.reference}
-      </td>
-
-      <td className="px-5 py-5 text-sm text-gray-700">{item.channel}</td>
-
-      <td className="px-5 py-5 text-sm text-gray-700">
-        {item.description}
-      </td>
-
-      <td className="px-5 py-5 text-sm text-gray-700">
-        {formatDateTime(item.created_at)}
-      </td>
-    </tr>
-  );
-}
-
-function ProviderRecordRow({ item }: { item: ProviderRecord }) {
-  return (
-    <tr className="hover:bg-blue-50/40">
-      <td className="px-5 py-5">
-        <p className="font-bold text-gray-900">{formatLabel(item.type)}</p>
-        <p className="mt-1 text-xs text-gray-500">{item.description}</p>
-      </td>
-
-      <td className="px-5 py-5">
-        <ProviderBadge provider={item.provider} />
-      </td>
-
-      <td className="px-5 py-5">
-        <DirectionBadge direction={item.direction} />
-      </td>
-
-      <td className="px-5 py-5">
-        <p className="font-black text-gray-900">
-          {formatCurrency(item.amount)}
-        </p>
-      </td>
-
-      <td className="px-5 py-5">
-        <StatusBadge status={item.status} />
-      </td>
-
-      <td className="max-w-[220px] break-all px-5 py-5 text-sm text-gray-700">
-        {item.reference}
-      </td>
-
-      <td className="max-w-[220px] break-all px-5 py-5 text-sm text-gray-700">
-        {item.internal_reference}
-      </td>
-
-      <td className="px-5 py-5 text-sm text-gray-700">
-        {formatDateTime(item.created_at)}
-      </td>
-    </tr>
-  );
-}
-
-function StatusBadge({ status }: { status: string | null | undefined }) {
-  const group = getStatusGroup(status);
-
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-        status
-      )}`}
-    >
-      {group === 'SUCCESSFUL' && <CheckCircle2 size={13} />}
-      {group === 'PENDING' && <Clock size={13} />}
-      {group === 'FAILED' && <XCircle size={13} />}
-      {formatLabel(status)}
-    </span>
-  );
-}
-
-function DirectionBadge({ direction }: { direction: Direction }) {
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-bold ${getDirectionStyle(
-        direction
-      )}`}
-    >
-      {getDirectionIcon(direction)}
-      {formatLabel(direction)}
-    </span>
-  );
-}
-
-function ProviderBadge({ provider }: { provider: string }) {
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
-      <CreditCard size={13} />
-      {formatLabel(provider)}
-    </span>
-  );
-}
-
-function EmptyState({ message }: { message: string }) {
-  return (
-    <div className="p-10 text-center">
-      <Wallet className="mx-auto mb-4 h-10 w-10 text-gray-300" />
-      <h3 className="text-lg font-bold text-gray-900">No records found</h3>
-      <p className="mt-2 text-sm text-gray-500">{message}</p>
-    </div>
-  );
-}
-
-function RecordFooter({
-  shown,
-  total,
-  clearFilters,
-}: {
-  shown: number;
-  total: number;
-  clearFilters: () => void;
-}) {
-  return (
-    <div className="mt-5 flex flex-col justify-between gap-3 text-sm text-gray-500 sm:flex-row sm:items-center">
-      <p>
-        Showing {shown} of {total} records
-      </p>
-
-      <button
-        type="button"
-        onClick={clearFilters}
-        className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-50"
-      >
-        Clear Filters
-      </button>
-    </div>
-  );
-}
-
-function StatCard({
+function StatButton({
   title,
   value,
+  description,
   icon,
-  color,
-  note,
+  active,
+  onClick,
 }: {
   title: string;
   value: number;
+  description: string;
   icon: ReactNode;
-  color: 'emerald' | 'green' | 'amber' | 'red' | 'blue';
-  note?: string;
+  active: boolean;
+  onClick: () => void;
 }) {
-  const classes = {
-    emerald: 'bg-emerald-50 text-emerald-700',
-    green: 'bg-green-50 text-green-700',
-    amber: 'bg-amber-50 text-amber-700',
-    red: 'bg-red-50 text-red-700',
-    blue: 'bg-blue-50 text-blue-700',
-  };
-
   return (
-    <div className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm md:p-6">
-      <div className={`mb-4 inline-flex rounded-2xl p-3 ${classes[color]}`}>
-        {icon}
+    <button
+      type="button"
+      onClick={onClick}
+      className={`group rounded-3xl border p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md md:p-6 ${
+        active
+          ? 'border-emerald-200 bg-emerald-50'
+          : 'border-gray-100 bg-white hover:border-emerald-200'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-bold text-gray-500">{title}</p>
+          <h3 className="mt-2 text-3xl font-black text-gray-900">{value}</h3>
+          <p className="mt-1 text-sm leading-6 text-gray-500">{description}</p>
+          <p className="mt-3 inline-flex items-center gap-1 text-xs font-black text-emerald-700 opacity-0 transition group-hover:opacity-100">
+            Open filtered records <ArrowRight className="h-3.5 w-3.5" />
+          </p>
+        </div>
+
+        <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-700 transition group-hover:bg-emerald-600 group-hover:text-white">
+          {icon}
+        </div>
       </div>
-      <p className="text-sm text-gray-500">{title}</p>
-      <h3 className="mt-1 text-3xl font-black text-gray-900">{value}</h3>
-      {note && <p className="mt-2 text-xs text-gray-500">{note}</p>}
-    </div>
+    </button>
   );
 }
 
-function ValueCard({
+function ValueButton({
   title,
   value,
-  variant = 'default',
-  note,
+  description,
+  active,
+  onClick,
 }: {
   title: string;
   value: number;
-  variant?: 'default' | 'emerald' | 'blue' | 'red';
-  note?: string;
+  description: string;
+  active: boolean;
+  onClick: () => void;
 }) {
-  const classes = {
-    default: 'border-gray-100 bg-white text-gray-900',
-    emerald: 'border-emerald-100 bg-emerald-50 text-emerald-800',
-    blue: 'border-blue-100 bg-blue-50 text-blue-800',
-    red: 'border-red-100 bg-red-50 text-red-800',
-  };
-
   return (
-    <div
-      className={`rounded-3xl border p-5 shadow-sm md:p-6 ${classes[variant]}`}
+    <button
+      type="button"
+      onClick={onClick}
+      className={`group rounded-3xl border p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md md:p-6 ${
+        active
+          ? 'border-blue-200 bg-blue-50'
+          : 'border-gray-100 bg-white hover:border-blue-200'
+      }`}
     >
-      <p className="text-sm opacity-80">{title}</p>
-      <h3 className="mt-2 text-2xl font-black md:text-3xl">
+      <p className="text-sm font-bold text-gray-500">{title}</p>
+      <h3 className="mt-2 text-2xl font-black text-gray-900 md:text-3xl">
         {formatCurrency(value)}
       </h3>
-      {note && <p className="mt-2 text-xs opacity-80">{note}</p>}
-    </div>
+      <p className="mt-1 text-sm leading-6 text-gray-500">{description}</p>
+      <p className="mt-3 inline-flex items-center gap-1 text-xs font-black text-blue-700 opacity-0 transition group-hover:opacity-100">
+        Open related records <ArrowRight className="h-3.5 w-3.5" />
+      </p>
+    </button>
   );
 }
 
-function TableHead({ children }: { children: ReactNode }) {
+function EmptyState() {
   return (
-    <th className="px-5 py-4 text-xs font-black uppercase tracking-wide text-gray-500">
-      {children}
-    </th>
+    <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 p-8 text-center">
+      <Wallet className="h-10 w-10 text-gray-300" />
+      <h2 className="text-lg font-black text-gray-900">
+        No transaction records found
+      </h2>
+      <p className="max-w-md text-sm leading-6 text-gray-500">
+        Try clearing the filters or search term. Manual MoMo payment records
+        will appear here after you submit a payment reference.
+      </p>
+    </div>
   );
 }

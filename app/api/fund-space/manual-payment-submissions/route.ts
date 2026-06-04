@@ -22,6 +22,18 @@ type ManualPaymentSubmissionBody = {
   screenshot_url?: string;
 };
 
+type ProfileRole = 'USER' | 'AGENT' | 'ADMIN' | 'SUPER_ADMIN' | string;
+
+type ContributionRow = {
+  id: string;
+  fund_space_id: string;
+  round_id: string | null;
+  user_id: string;
+  amount_due: number | null;
+  amount_paid: number | null;
+  status: string | null;
+};
+
 function getSupabaseUrl() {
   const supabaseUrl =
     process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -91,6 +103,10 @@ function normalizeNumber(value: number | string | null | undefined) {
   if (!Number.isFinite(amount)) return 0;
 
   return amount;
+}
+
+function normalizeRole(role: ProfileRole | null | undefined) {
+  return String(role || '').trim().toUpperCase().replaceAll('-', '_');
 }
 
 function normalizeSenderNetwork(value: string | null | undefined) {
@@ -178,6 +194,22 @@ async function getAccessToken(request: NextRequest) {
   return authorizationHeader.replace('Bearer ', '').trim();
 }
 
+function isPayableContributionStatus(status: string | null | undefined) {
+  const value = String(status || '').toUpperCase();
+
+  return ['PENDING', 'DUE', 'OVERDUE', 'UNPAID', 'PARTIAL'].includes(value);
+}
+
+function isAdminRole(role: string) {
+  return role === 'ADMIN' || role === 'SUPER_ADMIN';
+}
+
+function isActiveAgentCustomerRelationship(status: string | null | undefined) {
+  const value = String(status || '').toUpperCase();
+
+  return ['ACTIVE', 'APPROVED', 'VERIFIED'].includes(value);
+}
+
 async function guardAgainstDuplicatePendingSubmission({
   contributionId,
   transactionReference,
@@ -238,34 +270,6 @@ async function guardAgainstDuplicatePendingSubmission({
   };
 }
 
-async function updatePayerDetails({
-  contributionId,
-  transactionReference,
-  payerType,
-  payerRelationship,
-}: {
-  contributionId: string;
-  transactionReference: string;
-  payerType: PayerType;
-  payerRelationship: string | null;
-}) {
-  const serviceSupabase = createServiceClient();
-
-  const { error } = await serviceSupabase
-    .from('manual_payment_submissions')
-    .update({
-      payer_type: payerType,
-      payer_relationship: payerRelationship,
-    } as never)
-    .eq('contribution_id', contributionId)
-    .eq('transaction_reference', transactionReference)
-    .eq('status', 'PENDING_REVIEW');
-
-  if (error) {
-    console.error('Payer details update warning:', error);
-  }
-}
-
 export async function POST(request: NextRequest) {
   try {
     const accessToken = await getAccessToken(request);
@@ -309,15 +313,152 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const supabase = createUserClient(accessToken);
+    const userSupabase = createUserClient(accessToken);
+    const serviceSupabase = createServiceClient();
 
     const {
       data: { user },
       error: userError,
-    } = await supabase.auth.getUser(accessToken);
+    } = await userSupabase.auth.getUser(accessToken);
 
     if (userError || !user) {
       return errorResponse('Your session has expired. Please log in again.', 401);
+    }
+
+    const { data: profile, error: profileError } = await serviceSupabase
+      .from('profiles')
+      .select('id, full_name, phone, email, role, status, verification_status')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (profileError) {
+      console.error('Manual payment profile lookup error:', profileError);
+      return errorResponse('Unable to verify your profile.', 500);
+    }
+
+    if (!profile) {
+      return errorResponse('Profile not found for this account.', 404);
+    }
+
+    const role = normalizeRole(profile.role);
+
+    if (!['USER', 'AGENT', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+      return errorResponse('Your account role cannot submit this payment.', 403);
+    }
+
+    if (profile.status !== 'ACTIVE') {
+      return errorResponse('Your account is not active.', 403);
+    }
+
+    if (profile.verification_status !== 'VERIFIED') {
+      return errorResponse(
+        'Your account must be verified before submitting payment.',
+        403
+      );
+    }
+
+    const { data: contributionData, error: contributionError } =
+      await serviceSupabase
+        .from('fund_space_contributions')
+        .select('id, fund_space_id, round_id, user_id, amount_due, amount_paid, status')
+        .eq('id', contributionId)
+        .maybeSingle();
+
+    if (contributionError) {
+      console.error('Manual payment contribution lookup error:', contributionError);
+      return errorResponse('Unable to load contribution record.', 500);
+    }
+
+    if (!contributionData) {
+      return errorResponse('Contribution record not found.', 404);
+    }
+
+    const contribution = contributionData as ContributionRow;
+    const isOwnContribution = contribution.user_id === user.id;
+
+    if (role === 'USER' && !isOwnContribution) {
+      return errorResponse(
+        'You can only submit payment for your own contribution.',
+        403
+      );
+    }
+
+    if (role === 'AGENT' && !isOwnContribution) {
+      const { data: agentCustomer, error: agentCustomerError } =
+        await serviceSupabase
+          .from('agent_customers')
+          .select('id, agent_id, customer_id, relationship_status')
+          .eq('agent_id', user.id)
+          .eq('customer_id', contribution.user_id)
+          .maybeSingle();
+
+      if (agentCustomerError) {
+        console.error('Agent customer lookup error:', agentCustomerError);
+        return errorResponse('Unable to verify customer assignment.', 500);
+      }
+
+      if (!agentCustomer) {
+        return errorResponse(
+          'This customer is not assigned to your agent account.',
+          403
+        );
+      }
+
+      if (
+        !isActiveAgentCustomerRelationship(
+          String(agentCustomer.relationship_status || '')
+        )
+      ) {
+        return errorResponse(
+          'This customer assignment is not active, so payment cannot be submitted.',
+          403
+        );
+      }
+    }
+
+    const { data: contributionOwnerProfile, error: ownerProfileError } =
+      await serviceSupabase
+        .from('profiles')
+        .select('id, full_name, phone, email, role, status, verification_status')
+        .eq('id', contribution.user_id)
+        .maybeSingle();
+
+    if (ownerProfileError) {
+      console.error('Contribution owner profile lookup error:', ownerProfileError);
+      return errorResponse('Unable to load contribution owner profile.', 500);
+    }
+
+    if (!contributionOwnerProfile) {
+      return errorResponse('Contribution owner profile was not found.', 404);
+    }
+
+    if (contributionOwnerProfile.status !== 'ACTIVE') {
+      return errorResponse('The contribution owner account is not active.', 403);
+    }
+
+    if (contributionOwnerProfile.verification_status !== 'VERIFIED') {
+      return errorResponse(
+        'The contribution owner must be verified before payment can be submitted.',
+        403
+      );
+    }
+
+    if (!isPayableContributionStatus(contribution.status)) {
+      if (String(contribution.status || '').toUpperCase() === 'PAID') {
+        return errorResponse('This contribution has already been paid.', 409);
+      }
+
+      return errorResponse(
+        `This contribution cannot be paid because its current status is ${contribution.status || 'UNKNOWN'}.`,
+        409
+      );
+    }
+
+    const amountDue = Number(contribution.amount_due || 0);
+    const amountPaid = Number(contribution.amount_paid || 0);
+
+    if (amountDue > 0 && amountPaid >= amountDue) {
+      return errorResponse('This contribution has already been fully paid.', 409);
     }
 
     const duplicateGuard = await guardAgainstDuplicatePendingSubmission({
@@ -329,43 +470,108 @@ export async function POST(request: NextRequest) {
       return errorResponse(duplicateGuard.message, duplicateGuard.status);
     }
 
-    const { data, error } = await supabase.rpc(
-      'submit_manual_fund_space_payment',
-      {
-        p_contribution_id: contributionId,
-        p_total_amount_paid: totalAmountPaid,
-        p_transaction_reference: transactionReference,
-        p_sender_name: normalizeText(body.sender_name) || undefined,
-        p_sender_phone: normalizeText(body.sender_phone) || undefined,
-        p_sender_network: normalizeSenderNetwork(body.sender_network) || undefined,
-        p_company_payment_account_id:
-          normalizeText(body.company_payment_account_id) || undefined,
-        p_payment_note: enhancedPaymentNote || undefined,
-        p_screenshot_url: normalizeText(body.screenshot_url) || undefined,
-      }
-    );
+    const normalizedSenderNetwork = normalizeSenderNetwork(body.sender_network);
 
-    if (error) {
-      console.error('MoMo payment submission RPC error:', error);
+    /*
+      This is the important fix:
+      We insert using the service client after validating ownership ourselves.
+      We do not call submit_manual_fund_space_payment here because that RPC is
+      still rejecting agent self-contributions as if they were unassigned customers.
+    */
+    const insertPayload = {
+      contribution_id: contribution.id,
+      fund_space_id: contribution.fund_space_id,
+      round_id: contribution.round_id,
+      user_id: contribution.user_id,
+      agent_id: role === 'AGENT' && !isOwnContribution ? user.id : null,
+      status: 'PENDING_REVIEW',
+      transaction_reference: transactionReference,
+      total_amount_paid: totalAmountPaid,
+      sender_name: normalizeText(body.sender_name),
+      sender_phone: normalizeText(body.sender_phone),
+      sender_network: normalizedSenderNetwork,
+      company_payment_account_id: normalizeText(body.company_payment_account_id),
+      payment_note: enhancedPaymentNote || null,
+      screenshot_url: normalizeText(body.screenshot_url),
+      payer_type: payerType,
+      payer_relationship: payerRelationship,
+    };
+
+    const { data: submission, error: insertError } = await serviceSupabase
+      .from('manual_payment_submissions')
+      .insert(insertPayload as never)
+      .select('id, contribution_id, fund_space_id, user_id, agent_id, status, transaction_reference, total_amount_paid, created_at')
+      .single();
+
+    if (insertError) {
+      console.error('Manual MoMo payment submission insert error:', insertError);
 
       return errorResponse(
-        error.message || 'Unable to submit payment for verification.',
+        insertError.message || 'Unable to submit payment for verification.',
         500
       );
     }
 
-    await updatePayerDetails({
-      contributionId,
-      transactionReference,
-      payerType,
-      payerRelationship,
+    await serviceSupabase.rpc('create_deduped_notification', {
+      p_user_id: contribution.user_id,
+      p_title: 'MoMo payment submitted',
+      p_message:
+        'Your MoMo payment reference has been submitted successfully and is awaiting admin verification.',
+      p_type: 'INFO',
+      p_related_entity_type: 'manual_payment_submissions',
+      p_related_entity_id: submission.id,
+      p_dedupe_key: `manual_payment_submitted:${submission.id}:customer`,
     });
+
+    if (role === 'AGENT' && !isOwnContribution) {
+      await serviceSupabase.rpc('create_deduped_notification', {
+        p_user_id: user.id,
+        p_title: 'Customer MoMo payment submitted',
+        p_message:
+          'You submitted a customer MoMo payment reference successfully. It is awaiting admin verification.',
+        p_type: 'INFO',
+        p_related_entity_type: 'manual_payment_submissions',
+        p_related_entity_id: submission.id,
+        p_dedupe_key: `manual_payment_submitted:${submission.id}:agent`,
+      });
+    }
+
+    const { data: admins } = await serviceSupabase
+      .from('profiles')
+      .select('id')
+      .in('role', ['ADMIN', 'SUPER_ADMIN']);
+
+    if (admins && admins.length > 0) {
+      const adminNotifications = admins.map((admin) => ({
+        user_id: admin.id,
+        title: 'New MoMo payment needs verification',
+        message: `${
+          contributionOwnerProfile.full_name || 'A Fund Space member'
+        } submitted a MoMo payment reference for admin verification.`,
+        type: 'MOMO_VERIFICATION_REQUIRED',
+        related_entity_type: 'manual_payment_submissions',
+        related_entity_id: submission.id,
+        dedupe_key: `manual_payment_submitted:${submission.id}:admin:${admin.id}`,
+        is_read: false,
+      }));
+
+      const { error: adminNotificationError } = await serviceSupabase
+        .from('notifications')
+        .insert(adminNotifications as never);
+
+      if (adminNotificationError) {
+        console.error(
+          'Admin manual payment notification warning:',
+          adminNotificationError
+        );
+      }
+    }
 
     return NextResponse.json({
       success: true,
       message:
         'MoMo payment reference submitted successfully. Admin will verify the transaction before confirming the contribution.',
-      result: data,
+      submission,
     });
   } catch (error) {
     console.error('MoMo payment submission route error:', error);

@@ -327,7 +327,7 @@ export async function POST(request: NextRequest) {
       return auth.response;
     }
 
-    if (!auth.userSupabase) {
+    if (!auth.user) {
       return errorResponse('Unable to verify admin session.', 401);
     }
 
@@ -344,16 +344,82 @@ export async function POST(request: NextRequest) {
       return errorResponse('Action must be APPROVE or REJECT.');
     }
 
-    if (action === 'APPROVE') {
-      const { data, error } = await auth.userSupabase.rpc(
-        'approve_manual_fund_space_payment_submission',
-        {
-          p_submission_id: submissionId,
-        }
+    const supabase = createServiceClient();
+
+    const { data: submission, error: submissionError } = await supabase
+      .from('manual_payment_submissions')
+      .select(
+        `
+        id,
+        contribution_id,
+        fund_space_id,
+        round_id,
+        user_id,
+        agent_id,
+        status,
+        transaction_reference,
+        total_amount_paid,
+        sender_name,
+        sender_phone,
+        sender_network,
+        payment_note,
+        screenshot_url,
+        created_at
+      `
+      )
+      .eq('id', submissionId)
+      .maybeSingle();
+
+    if (submissionError) {
+      console.error('Manual payment submission lookup error:', submissionError);
+
+      return errorResponse(
+        submissionError.message || 'Unable to load payment submission.',
+        500
       );
+    }
+
+    if (!submission) {
+      return errorResponse('Manual payment submission not found.', 404);
+    }
+
+    if (submission.status !== 'PENDING_REVIEW') {
+      return errorResponse(
+        `This submission has already been ${String(
+          submission.status || 'processed'
+        ).toLowerCase()}.`,
+        409
+      );
+    }
+
+    const paymentAmount = Number(submission.total_amount_paid || 0);
+
+    if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
+      return errorResponse(
+        'Payment amount must be greater than zero. The manual payment submission has no valid total_amount_paid value.',
+        400
+      );
+    }
+
+    if (action === 'APPROVE') {
+      const rpcClient = supabase as any;
+
+      const { data, error } = await rpcClient.rpc(
+  'approve_manual_fund_space_payment_submission',
+  {
+    p_submission_id: submission.id,
+    p_admin_id: auth.user.id,
+  }
+);
 
       if (error) {
-        console.error('Approve manual payment submission RPC error:', error);
+        console.error('Approve manual payment submission RPC error:', {
+          error,
+          submission_id: submission.id,
+          contribution_id: submission.contribution_id,
+          total_amount_paid: submission.total_amount_paid,
+          parsed_payment_amount: paymentAmount,
+        });
 
         return errorResponse(
           error.message || 'Unable to approve payment submission.',
@@ -374,10 +440,12 @@ export async function POST(request: NextRequest) {
       return errorResponse('Rejection reason is required.');
     }
 
-    const { data, error } = await auth.userSupabase.rpc(
+    const rpcClient = supabase as any;
+
+    const { data, error } = await rpcClient.rpc(
       'reject_manual_fund_space_payment_submission',
       {
-        p_submission_id: submissionId,
+        p_submission_id: submission.id,
         p_reason: reason,
       }
     );

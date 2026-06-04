@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import type { Database } from '@/lib/database.types';
 import { initializePaystackTransaction } from '@/lib/payments/paystack';
 import { generatePaymentReference } from '@/lib/payments/references';
+import { PaymentTransactionType } from '@/lib/payments/payment-types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -119,7 +120,9 @@ export async function POST(request: NextRequest) {
 
     const { data: agentProfile, error: agentProfileError } = await supabase
       .from('profiles')
-      .select('id, full_name, email, phone, role, status, verification_status')
+      .select(
+        'id, full_name, email, phone, momo_number, role, status, verification_status'
+      )
       .eq('id', user.id)
       .maybeSingle();
 
@@ -132,11 +135,14 @@ export async function POST(request: NextRequest) {
       return errorResponse('Agent profile not found.', 404);
     }
 
+    const currentRole = String(agentProfile.role || '').toUpperCase();
+    const isOwnPayment = customerId === user.id;
+
     if (agentProfile.status !== 'ACTIVE') {
       return errorResponse('Your agent account is not active.', 403);
     }
 
-    if (agentProfile.role !== 'AGENT') {
+    if (currentRole !== 'AGENT') {
       return errorResponse('Only agents can initiate customer deposits.', 403);
     }
 
@@ -147,23 +153,33 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { data: agentCustomer, error: agentCustomerError } = await supabase
-  .from('agent_customers')
-  .select('id, agent_id, customer_id')
-  .eq('agent_id', user.id)
-  .eq('customer_id', customerId)
-  .maybeSingle();
+    /*
+      Important rule:
+      - Agent paying for himself/herself: allowed, no agent_customers check.
+      - Agent paying for another person: must be assigned to that customer.
+    */
+    if (!isOwnPayment) {
+      const { data: agentCustomer, error: agentCustomerError } = await supabase
+        .from('agent_customers')
+        .select('id, agent_id, customer_id')
+        .eq('agent_id', user.id)
+        .eq('customer_id', customerId)
+        .maybeSingle();
 
-    if (agentCustomerError) {
-      console.error('Agent customer lookup error:', agentCustomerError);
-      return errorResponse('Unable to verify this customer under your account.', 500);
-    }
+      if (agentCustomerError) {
+        console.error('Agent customer lookup error:', agentCustomerError);
+        return errorResponse(
+          'Unable to verify this customer under your account.',
+          500
+        );
+      }
 
-    if (!agentCustomer) {
-      return errorResponse(
-        'This customer is not assigned to your agent account.',
-        403
-      );
+      if (!agentCustomer) {
+        return errorResponse(
+          'This customer is not assigned to your agent account.',
+          403
+        );
+      }
     }
 
     const { data: customerProfile, error: customerProfileError } =
@@ -188,13 +204,28 @@ export async function POST(request: NextRequest) {
       return errorResponse('Customer account is not active.', 403);
     }
 
-    if (customerProfile.role !== 'USER') {
+    const targetRole = String(customerProfile.role || '').toUpperCase();
+
+    /*
+      If the agent is paying for himself/herself, the target profile can be AGENT.
+      If paying for another person, the target must be USER.
+    */
+    if (isOwnPayment && targetRole !== 'AGENT') {
+      return errorResponse(
+        'Agent self-payment must belong to the logged-in agent account.',
+        403
+      );
+    }
+
+    if (!isOwnPayment && targetRole !== 'USER') {
       return errorResponse('Deposits can only be made for customer accounts.', 403);
     }
 
     if (customerProfile.verification_status !== 'VERIFIED') {
       return errorResponse(
-        'Customer must be verified before receiving real deposits.',
+        isOwnPayment
+          ? 'Your agent account must be verified before making payment.'
+          : 'Customer must be verified before receiving real deposits.',
         403
       );
     }
@@ -219,10 +250,7 @@ export async function POST(request: NextRequest) {
 
     if (walletCreateError) {
       console.error('Customer wallet creation error:', walletCreateError);
-      return errorResponse(
-        'Unable to prepare customer wallet. Please try again.',
-        500
-      );
+      return errorResponse('Unable to prepare wallet. Please try again.', 500);
     }
 
     const { data: wallet, error: walletLookupError } = await supabase
@@ -233,19 +261,27 @@ export async function POST(request: NextRequest) {
 
     if (walletLookupError || !wallet) {
       console.error('Customer wallet lookup error:', walletLookupError);
-      return errorResponse('Customer wallet account not found.', 500);
+      return errorResponse('Wallet account not found.', 500);
     }
 
-    const paymentReference = generatePaymentReference('AGENT_CUSTOMER_DEPOSIT');
+    /*
+      Do not use AGENT_SELF_DEPOSIT because your PaymentTransactionType
+      does not support it. Agent self-payment is treated as WALLET_DEPOSIT.
+    */
+    const paymentType: PaymentTransactionType = isOwnPayment
+      ? 'WALLET_DEPOSIT'
+      : 'AGENT_CUSTOMER_DEPOSIT';
+
+    const paymentReference = generatePaymentReference(paymentType);
 
     const { data: paymentTransaction, error: paymentInsertError } =
       await supabase
         .from('payment_transactions')
         .insert({
           user_id: customerProfile.id,
-          customer_id: customerProfile.id,
+          customer_id: isOwnPayment ? null : customerProfile.id,
           wallet_id: wallet.id,
-          payment_type: 'AGENT_CUSTOMER_DEPOSIT',
+          payment_type: paymentType,
           direction: 'INCOMING',
           provider: 'PAYSTACK',
           channel: 'MOBILE_MONEY',
@@ -259,11 +295,14 @@ export async function POST(request: NextRequest) {
           payer_phone: payerPhone,
           initiated_by: user.id,
           metadata: {
-            source: 'agent_customer_deposit_initiate_route',
+            source: isOwnPayment
+              ? 'agent_self_deposit_initiate_route'
+              : 'agent_customer_deposit_initiate_route',
+            payment_context: isOwnPayment ? 'AGENT_SELF' : 'AGENT_CUSTOMER',
             agent_id: user.id,
             agent_name: agentProfile.full_name,
-            customer_id: customerProfile.id,
-            customer_name: customerProfile.full_name,
+            customer_id: isOwnPayment ? null : customerProfile.id,
+            customer_name: isOwnPayment ? null : customerProfile.full_name,
             callback_page: '/agent/deposits',
           },
         })
@@ -272,10 +311,7 @@ export async function POST(request: NextRequest) {
 
     if (paymentInsertError || !paymentTransaction) {
       console.error('Agent customer deposit insert error:', paymentInsertError);
-      return errorResponse(
-        'Unable to create customer deposit payment. Please try again.',
-        500
-      );
+      return errorResponse('Unable to create payment. Please try again.', 500);
     }
 
     const appUrl = getAppUrl();
@@ -293,12 +329,13 @@ export async function POST(request: NextRequest) {
       callback_url: callbackUrl,
       metadata: {
         payment_transaction_id: paymentTransaction.id,
-        payment_type: 'AGENT_CUSTOMER_DEPOSIT',
+        payment_type: paymentType,
+        payment_context: isOwnPayment ? 'AGENT_SELF' : 'AGENT_CUSTOMER',
         agent_id: user.id,
         agent_name: agentProfile.full_name,
         user_id: customerProfile.id,
-        customer_id: customerProfile.id,
-        customer_name: customerProfile.full_name,
+        customer_id: isOwnPayment ? null : customerProfile.id,
+        customer_name: isOwnPayment ? null : customerProfile.full_name,
         wallet_id: wallet.id,
         internal_reference: paymentReference,
         payer_phone: payerPhone,
@@ -339,33 +376,44 @@ export async function POST(request: NextRequest) {
 
     await supabase.rpc('create_deduped_notification', {
       p_user_id: customerProfile.id,
-      p_title: 'Deposit initiated by agent',
-      p_message: `Your TrustPoint deposit of GH₵${amount.toFixed(
-        2
-      )} has been initiated by your agent. Complete the Mobile Money payment to credit your wallet.`,
+      p_title: isOwnPayment
+        ? 'Agent payment initiated'
+        : 'Deposit initiated by agent',
+      p_message: isOwnPayment
+        ? `Your TrustPoint payment of GH₵${amount.toFixed(
+            2
+          )} has been initiated successfully. Complete the Mobile Money payment to continue.`
+        : `Your TrustPoint deposit of GH₵${amount.toFixed(
+            2
+          )} has been initiated by your agent. Complete the Mobile Money payment to credit your wallet.`,
       p_type: 'INFO',
       p_related_entity_type: 'payment_transactions',
       p_related_entity_id: paymentTransaction.id,
-      p_dedupe_key: `agent_customer_deposit_initiated:${paymentTransaction.id}:customer`,
+      p_dedupe_key: `agent_payment_initiated:${paymentTransaction.id}:target`,
     });
 
-    await supabase.rpc('create_deduped_notification', {
-      p_user_id: user.id,
-      p_title: 'Customer deposit initiated',
-      p_message: `You initiated a deposit of GH₵${amount.toFixed(2)} for ${
-        customerProfile.full_name || 'a customer'
-      }.`,
-      p_type: 'INFO',
-      p_related_entity_type: 'payment_transactions',
-      p_related_entity_id: paymentTransaction.id,
-      p_dedupe_key: `agent_customer_deposit_initiated:${paymentTransaction.id}:agent`,
-    });
+    if (!isOwnPayment) {
+      await supabase.rpc('create_deduped_notification', {
+        p_user_id: user.id,
+        p_title: 'Customer deposit initiated',
+        p_message: `You initiated a deposit of GH₵${amount.toFixed(2)} for ${
+          customerProfile.full_name || 'a customer'
+        }.`,
+        p_type: 'INFO',
+        p_related_entity_type: 'payment_transactions',
+        p_related_entity_id: paymentTransaction.id,
+        p_dedupe_key: `agent_customer_deposit_initiated:${paymentTransaction.id}:agent`,
+      });
+    }
 
     return NextResponse.json({
       success: true,
-      message: 'Customer deposit payment initialized successfully.',
+      message: isOwnPayment
+        ? 'Agent payment initialized successfully.'
+        : 'Customer deposit payment initialized successfully.',
       payment_transaction_id: paymentTransaction.id,
-      customer_id: customerProfile.id,
+      customer_id: isOwnPayment ? null : customerProfile.id,
+      user_id: customerProfile.id,
       reference: paymentReference,
       callback_url: callbackUrl,
       authorization_url: checkoutUrl,
@@ -378,7 +426,7 @@ export async function POST(request: NextRequest) {
     const message =
       error instanceof Error
         ? error.message
-        : 'Something went wrong while initializing customer deposit.';
+        : 'Something went wrong while initializing payment.';
 
     return NextResponse.json(
       {

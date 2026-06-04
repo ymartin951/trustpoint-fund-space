@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import type { ElementType, ReactNode } from 'react';
+import NotificationBellLink from '@/components/notifications/NotificationBellLink';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -95,6 +96,12 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
       description: 'Approve member verification',
     },
     {
+      href: '/admin/transactions',
+      label: 'System Transactions',
+      icon: BadgeCheck,
+      description: 'Approve member verification',
+    },
+    {
       href: '/admin/fund-space',
       label: 'Fund Space Management',
       icon: WalletCards,
@@ -151,6 +158,7 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
       icon: ClipboardCheck,
       description: 'System activity history',
     },
+    
   ];
 
   const agentNavItems: NavItem[] = [
@@ -613,15 +621,13 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
             </div>
 
             <div className="flex items-center gap-2 sm:gap-3">
-              <button
-                type="button"
-                className="relative flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50 sm:h-11 sm:w-11"
-                aria-label="Notifications"
-                onClick={() => router.push(getNotificationsHref())}
-              >
-                <Bell className="h-5 w-5" />
-                <span className="absolute right-2.5 top-2.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" />
-              </button>
+              <NotificationBellLink
+                href={getNotificationsHref()}
+                label="Notifications"
+                showText={false}
+                className="flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50 sm:h-11 sm:w-11"
+                iconClassName="h-5 w-5"
+              />
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>

@@ -4,20 +4,16 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
-  AlertTriangle,
   ArrowRight,
-  BadgeCheck,
   Banknote,
-  CalendarDays,
+  BellRing,
   CheckCircle2,
   Clock,
-  Eye,
   HandCoins,
   Loader2,
   RefreshCw,
   Search,
-  ShieldAlert,
-  TrendingUp,
+  ShieldCheck,
   Users,
 } from 'lucide-react';
 
@@ -47,6 +43,16 @@ type OverviewStats = {
   expected_weekly_volume: number;
 };
 
+type FundSpaceAction =
+  | 'SEND_DEADLINE_REMINDERS'
+  | 'PROCESS_DUE_ROUNDS'
+  | 'START_NEXT_ROUND';
+
+type Message = {
+  type: 'success' | 'error' | 'info';
+  text: string;
+};
+
 const emptyStats: OverviewStats = {
   total_groups: 0,
   forming_groups: 0,
@@ -60,21 +66,36 @@ const emptyStats: OverviewStats = {
   expected_weekly_volume: 0,
 };
 
-function formatCurrency(amount: number | null | undefined) {
+const quickFilters = [
+  { label: 'All', value: 'ALL' },
+  { label: 'Active', value: 'ACTIVE' },
+  { label: 'Forming', value: 'FORMING' },
+  { label: 'Paused', value: 'PAUSED' },
+  { label: 'Completed', value: 'COMPLETED' },
+];
+
+function normalizeRole(role: string | null | undefined) {
+  return String(role || '').trim().toUpperCase().replaceAll(' ', '_');
+}
+
+function isAdminRole(role: string | null | undefined) {
+  const value = normalizeRole(role);
+  return value === 'ADMIN' || value === 'SUPER_ADMIN';
+}
+
+function formatCurrency(amount: number | string | null | undefined) {
   return `GH₵${Number(amount || 0).toLocaleString('en-GH', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
 }
 
-function formatDate(dateString: string | null | undefined) {
-  if (!dateString) return 'Not set';
+function formatDate(value: string | null | undefined) {
+  if (!value) return 'Not set';
 
-  const date = new Date(dateString);
+  const date = new Date(value);
 
-  if (Number.isNaN(date.getTime())) {
-    return 'Invalid date';
-  }
+  if (Number.isNaN(date.getTime())) return 'Invalid date';
 
   return date.toLocaleDateString('en-GH', {
     year: 'numeric',
@@ -92,46 +113,27 @@ function formatLabel(value: string | null | undefined) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function getStatusStyle(status: string | null | undefined) {
+function getStatusClass(status: string | null | undefined) {
   const value = String(status || 'FORMING').toUpperCase();
 
-  if (value === 'ACTIVE') {
-    return 'bg-emerald-50 text-emerald-700 border-emerald-100';
-  }
-
-  if (value === 'FORMING') {
-    return 'bg-amber-50 text-amber-700 border-amber-100';
-  }
-
-  if (value === 'COMPLETED') {
-    return 'bg-blue-50 text-blue-700 border-blue-100';
-  }
-
-  if (value === 'PAUSED') {
-    return 'bg-purple-50 text-purple-700 border-purple-100';
-  }
-
+  if (value === 'ACTIVE') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  if (value === 'FORMING') return 'border-amber-200 bg-amber-50 text-amber-700';
+  if (value === 'COMPLETED') return 'border-blue-200 bg-blue-50 text-blue-700';
+  if (value === 'PAUSED') return 'border-purple-200 bg-purple-50 text-purple-700';
   if (value === 'DEFAULTED' || value === 'CANCELLED' || value === 'FAILED') {
-    return 'bg-red-50 text-red-700 border-red-100';
+    return 'border-red-200 bg-red-50 text-red-700';
   }
 
-  return 'bg-gray-50 text-gray-700 border-gray-100';
+  return 'border-gray-200 bg-gray-50 text-gray-700';
 }
 
-function getProgress(
-  memberCount: number | null | undefined,
-  memberLimit: number | null | undefined
-) {
+function getProgress(memberCount: number | null | undefined, memberLimit: number | null | undefined) {
   const count = Number(memberCount || 0);
   const limit = Number(memberLimit || 0);
 
   if (limit <= 0) return 0;
 
   return Math.min(Math.round((count / limit) * 100), 100);
-}
-
-function isAdminRole(role: string | null | undefined) {
-  return role === 'ADMIN' || role === 'SUPER_ADMIN';
 }
 
 function calculateStats(rows: FundSpaceOverviewRow[]): OverviewStats {
@@ -161,14 +163,70 @@ function calculateStats(rows: FundSpaceOverviewRow[]): OverviewStats {
   );
 }
 
+function MessageBox({ message }: { message: Message }) {
+  const isSuccess = message.type === 'success';
+  const isInfo = message.type === 'info';
+
+  return (
+    <div
+      className={`rounded-2xl border p-4 text-sm font-semibold ${
+        isSuccess
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          : isInfo
+            ? 'border-blue-200 bg-blue-50 text-blue-700'
+            : 'border-red-200 bg-red-50 text-red-700'
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        {isSuccess ? (
+          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
+        ) : (
+          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+        )}
+        <p>{message.text}</p>
+      </div>
+    </div>
+  );
+}
+
+function StatButton({
+  title,
+  value,
+  description,
+  active,
+  onClick,
+}: {
+  title: string;
+  value: string | number;
+  description: string;
+  active?: boolean;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-2xl border p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+        active
+          ? 'border-emerald-300 bg-emerald-50'
+          : 'border-gray-100 bg-white hover:border-emerald-200'
+      }`}
+    >
+      <p className="text-xs font-black uppercase tracking-wide text-gray-500">{title}</p>
+      <p className="mt-2 text-2xl font-black text-gray-950">{value}</p>
+      <p className="mt-1 text-sm leading-5 text-gray-500">{description}</p>
+    </button>
+  );
+}
+
 export default function AdminFundSpacePage() {
   const [adminProfile, setAdminProfile] = useState<AdminProfile | null>(null);
   const [fundSpaces, setFundSpaces] = useState<FundSpaceOverviewRow[]>([]);
-
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
-
+  const [actionMessage, setActionMessage] = useState<Message | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
 
@@ -183,7 +241,7 @@ export default function AdminFundSpacePage() {
     } = await supabase.auth.getSession();
 
     if (sessionError || !session?.user) {
-      throw new Error('Your session has expired. Please login again.');
+      throw new Error('Your session has expired. Please log in again.');
     }
 
     const { data, error } = await supabase
@@ -199,10 +257,10 @@ export default function AdminFundSpacePage() {
     const profile = data as AdminProfile;
 
     if (!isAdminRole(profile.role)) {
-      throw new Error('You do not have permission to view Fund Space management.');
+      throw new Error('Only admins and super admins can access this page.');
     }
 
-    if (profile.status !== 'ACTIVE') {
+    if (String(profile.status || '').toUpperCase() !== 'ACTIVE') {
       throw new Error('Your admin account must be active.');
     }
 
@@ -211,7 +269,6 @@ export default function AdminFundSpacePage() {
     }
 
     setAdminProfile(profile);
-
     return profile;
   }
 
@@ -224,7 +281,6 @@ export default function AdminFundSpacePage() {
       }
 
       setErrorMessage('');
-
       await checkAdminAccess();
 
       const { data, error } = await supabase
@@ -232,24 +288,91 @@ export default function AdminFundSpacePage() {
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       setFundSpaces((data || []) as FundSpaceOverviewRow[]);
-    } catch (error: unknown) {
+    } catch (error) {
       console.error('Admin Fund Space overview load error:', error);
 
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Unable to load Fund Space overview.';
-
-      setErrorMessage(message);
+      setErrorMessage(
+        error instanceof Error ? error.message : 'Unable to load Fund Space overview.'
+      );
       setFundSpaces([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  }
+
+  async function runFundSpaceAction(
+    action: FundSpaceAction,
+    payload?: { fund_space_id?: string }
+  ) {
+    try {
+      const confirmation =
+        action === 'SEND_DEADLINE_REMINDERS'
+          ? 'Send payment reminders to unpaid members and their agents?'
+          : action === 'PROCESS_DUE_ROUNDS'
+            ? 'Process due rounds now? This may mark unpaid contributions as overdue.'
+            : 'Start the next round for this Fund Space?';
+
+      if (!window.confirm(confirmation)) return;
+
+      const loadingKey = payload?.fund_space_id
+        ? `${action}_${payload.fund_space_id}`
+        : action;
+
+      setActionLoading(loadingKey);
+      setActionMessage(null);
+      setErrorMessage('');
+
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError || !session?.access_token) {
+        throw new Error('Your session has expired. Please log in again.');
+      }
+
+      const response = await fetch('/api/admin/fund-space/overview', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ action, ...payload }),
+      });
+
+      const rawText = await response.text();
+      const contentType = response.headers.get('content-type') || '';
+
+      if (!contentType.includes('application/json')) {
+        throw new Error(`Server returned a non-JSON response. Status: ${response.status}`);
+      }
+
+      const result = rawText
+        ? (JSON.parse(rawText) as { success?: boolean; message?: string })
+        : {};
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.message || 'Fund Space action failed.');
+      }
+
+      setActionMessage({
+        type: 'success',
+        text: result.message || 'Action completed successfully.',
+      });
+
+      await loadOverview(true);
+    } catch (error) {
+      console.error('Admin Fund Space action error:', error);
+      setActionMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Unable to complete action.',
+      });
+    } finally {
+      setActionLoading(null);
     }
   }
 
@@ -259,9 +382,9 @@ export default function AdminFundSpacePage() {
     const query = searchTerm.trim().toLowerCase();
 
     return fundSpaces.filter((item) => {
-      const name = (item.name || '').toLowerCase();
+      const name = String(item.name || '').toLowerCase();
       const id = String(item.id || '').toLowerCase();
-      const status = String(item.status || 'FORMING');
+      const status = String(item.status || 'FORMING').toUpperCase();
 
       const matchesSearch =
         !query ||
@@ -277,22 +400,12 @@ export default function AdminFundSpacePage() {
     });
   }, [fundSpaces, searchTerm, statusFilter]);
 
-  const statusOptions = useMemo(() => {
-    const statuses = Array.from(
-      new Set(fundSpaces.map((item) => String(item.status || 'FORMING')))
-    );
-
-    return ['ALL', ...statuses.sort()];
-  }, [fundSpaces]);
-
   if (loading) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="mx-auto mb-4 h-10 w-10 animate-spin text-emerald-600" />
-          <p className="text-sm text-gray-500">
-            Loading Fund Space management...
-          </p>
+      <div className="flex min-h-[65vh] items-center justify-center p-6">
+        <div className="rounded-3xl border border-gray-100 bg-white p-8 text-center shadow-sm">
+          <Loader2 className="mx-auto h-10 w-10 animate-spin text-emerald-600" />
+          <p className="mt-4 text-sm font-bold text-gray-600">Loading Fund Space groups...</p>
         </div>
       </div>
     );
@@ -313,547 +426,285 @@ export default function AdminFundSpacePage() {
   }
 
   return (
-    <div className="space-y-8">
-      <div className="rounded-3xl bg-gradient-to-r from-emerald-700 via-emerald-600 to-teal-600 p-6 text-white shadow-sm md:p-8">
-        <div className="flex flex-col justify-between gap-6 lg:flex-row lg:items-center">
-          <div>
-            <p className="mb-3 inline-flex rounded-full bg-white/15 px-4 py-1 text-sm font-medium">
-              Admin Management
+    <div className="mx-auto max-w-7xl space-y-6 pb-10">
+      <section className="rounded-3xl bg-gradient-to-br from-emerald-700 via-emerald-600 to-teal-600 p-5 text-white shadow-sm sm:p-6 lg:p-8">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="max-w-3xl">
+            <p className="inline-flex rounded-full bg-white/15 px-4 py-1 text-sm font-bold">
+              Admin Fund Space
             </p>
-
-            <h1 className="text-3xl font-black md:text-4xl">
-              Fund Space Management
+            <h1 className="mt-4 text-3xl font-black tracking-tight sm:text-4xl">
+              Manage Fund Space Groups
             </h1>
-
-            <p className="mt-4 max-w-3xl text-sm leading-7 text-emerald-50 md:text-base">
-              Monitor all Fund Space groups, member growth, payout progress,
-              defaulted members, and weekly contribution volume.
+            <p className="mt-3 text-sm leading-7 text-emerald-50 sm:text-base">
+              Simple controls for contributions, reminders, weekly rounds, and payouts.
+              All important actions are visible and easy to use on mobile.
             </p>
-
-            <div className="mt-6 flex flex-wrap gap-3">
-              <Link
-                href="/admin/fund-space/payouts"
-                className="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-emerald-700 hover:bg-emerald-50"
-              >
-                <Banknote size={16} />
-                Payout Approvals
-              </Link>
-
-              <Link
-                href="/admin/fund-space/contributions"
-                className="inline-flex items-center gap-2 rounded-xl bg-white/15 px-5 py-3 text-sm font-bold text-white ring-1 ring-white/20 hover:bg-white/20"
-              >
-                <HandCoins size={16} />
-                Contributions
-              </Link>
-            </div>
           </div>
 
           <button
             type="button"
             onClick={() => loadOverview(true)}
             disabled={refreshing}
-            className="inline-flex min-h-12 w-fit items-center justify-center gap-2 rounded-xl bg-white/15 px-5 py-3 text-sm font-bold text-white hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-black text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
           >
-            <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
-            Refresh
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+            Refresh Page
           </button>
         </div>
-      </div>
+      </section>
 
-      {errorMessage && (
-        <div className="flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm font-semibold text-red-700">
-          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
-          <span>{errorMessage}</span>
-        </div>
-      )}
+      {errorMessage && <MessageBox message={{ type: 'error', text: errorMessage }} />}
+      {actionMessage && <MessageBox message={actionMessage} />}
 
-      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Total Fund Spaces"
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatButton
+          title="Groups"
           value={stats.total_groups}
-          description="All created Fund Space groups"
-          icon={<Users size={24} />}
-          color="emerald"
+          description="All Fund Space groups"
+          active={statusFilter === 'ALL'}
+          onClick={() => setStatusFilter('ALL')}
         />
-
-        <StatCard
-          title="Active Groups"
+        <StatButton
+          title="Active"
           value={stats.active_groups}
-          description="Currently running contribution cycles"
-          icon={<CheckCircle2 size={24} />}
-          color="emerald"
+          description="Currently running groups"
+          active={statusFilter === 'ACTIVE'}
+          onClick={() => setStatusFilter('ACTIVE')}
         />
-
-        <StatCard
-          title="Forming Groups"
-          value={stats.forming_groups}
-          description="Waiting to reach member limit"
-          icon={<Clock size={24} />}
-          color="amber"
-        />
-
-        <StatCard
-          title="Completed Groups"
-          value={stats.completed_groups}
-          description="Successfully completed Fund Spaces"
-          icon={<BadgeCheck size={24} />}
-          color="blue"
-        />
-      </div>
-
-      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Total Members"
+        <StatButton
+          title="Members"
           value={stats.total_members}
-          icon={<Users size={24} />}
-          color="emerald"
+          description="Total group members"
         />
-
-        <ValueCard
+        <StatButton
           title="Weekly Volume"
-          value={stats.expected_weekly_volume}
-          icon={<Banknote size={24} />}
-          color="emerald"
+          value={formatCurrency(stats.expected_weekly_volume)}
+          description="Expected weekly contribution"
         />
+      </section>
 
-        <StatCard
-          title="Defaulted Members"
-          value={stats.defaulted_members}
-          icon={<ShieldAlert size={24} />}
-          color="red"
-        />
-
-        <StatCard
-          title="Members Paid Out"
-          value={stats.members_paid_out}
-          icon={<TrendingUp size={24} />}
-          color="emerald"
-        />
-      </div>
-
-      <div className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm md:p-6">
-        <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-center">
-          <div>
-            <h2 className="text-xl font-black text-gray-900">
-              All Fund Space Groups
-            </h2>
-
-            <p className="mt-1 text-sm text-gray-500">
-              Search, filter, view details, and monitor all Fund Space groups.
-            </p>
+      <section className="rounded-3xl border border-amber-200 bg-amber-50 p-5 shadow-sm sm:p-6">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex gap-4">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white text-amber-700 shadow-sm">
+              <BellRing className="h-6 w-6" />
+            </div>
+            <div>
+              <h2 className="text-xl font-black text-amber-950">Weekly Round Actions</h2>
+              <p className="mt-1 text-sm leading-6 text-amber-800">
+                Use these buttons to remind unpaid members and process due weekly rounds.
+              </p>
+            </div>
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-
-              <input
-                value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
-                placeholder="Search by name, ID, amount..."
-                className="min-h-11 w-full rounded-xl border border-gray-200 bg-white pl-10 pr-4 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 sm:w-72"
-              />
-            </div>
-
-            <select
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value)}
-              className="min-h-11 rounded-xl border border-gray-200 bg-white px-4 text-sm font-semibold text-gray-700 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+          <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[520px]">
+            <button
+              type="button"
+              disabled={actionLoading === 'SEND_DEADLINE_REMINDERS'}
+              onClick={() => runFundSpaceAction('SEND_DEADLINE_REMINDERS')}
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-amber-600 px-4 py-3 text-sm font-black text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {statusOptions.map((status) => (
-                <option key={status} value={status}>
-                  {status === 'ALL' ? 'All Statuses' : formatLabel(status)}
-                </option>
-              ))}
-            </select>
+              {actionLoading === 'SEND_DEADLINE_REMINDERS' ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <BellRing className="h-4 w-4" />
+              )}
+              Send Reminders
+            </button>
+
+            <button
+              type="button"
+              disabled={actionLoading === 'PROCESS_DUE_ROUNDS'}
+              onClick={() => runFundSpaceAction('PROCESS_DUE_ROUNDS')}
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-red-600 px-4 py-3 text-sm font-black text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {actionLoading === 'PROCESS_DUE_ROUNDS' ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Clock className="h-4 w-4" />
+              )}
+              Process Due Rounds
+            </button>
           </div>
         </div>
+      </section>
 
-        <div className="mt-6 space-y-4 lg:hidden">
-          {filteredFundSpaces.length === 0 ? (
-            <EmptyState />
-          ) : (
-            filteredFundSpaces.map((item) => (
-              <FundSpaceMobileCard key={String(item.id)} item={item} />
-            ))
-          )}
-        </div>
-
-        <div className="mt-6 hidden overflow-hidden rounded-2xl border border-gray-100 lg:block">
-          {filteredFundSpaces.length === 0 ? (
-            <EmptyState />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1150px] text-left">
-                <thead className="border-b border-gray-100 bg-gray-50">
-                  <tr>
-                    <TableHead>Fund Space</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Members</TableHead>
-                    <TableHead>Contribution</TableHead>
-                    <TableHead>Current Round</TableHead>
-                    <TableHead>Paid Out</TableHead>
-                    <TableHead>Defaults</TableHead>
-                    <TableHead>Start Date</TableHead>
-                    <TableHead align="right">Actions</TableHead>
-                  </tr>
-                </thead>
-
-                <tbody className="divide-y divide-gray-100">
-                  {filteredFundSpaces.map((item) => (
-                    <FundSpaceTableRow key={String(item.id)} item={item} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        <div className="mt-5 flex flex-col justify-between gap-3 text-sm text-gray-500 sm:flex-row sm:items-center">
-          <p>
-            Showing {filteredFundSpaces.length} of {fundSpaces.length} Fund
-            Spaces
-          </p>
-
-          <button
-            type="button"
-            onClick={() => {
-              setSearchTerm('');
-              setStatusFilter('ALL');
-            }}
-            className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-50"
-          >
-            Clear Filters
-          </button>
-        </div>
-      </div>
-
-      <div className="rounded-3xl border border-emerald-100 bg-emerald-50 p-6">
-        <h2 className="text-lg font-black text-emerald-800">
-          Admin Reminder
-        </h2>
-
-        <p className="mt-2 text-sm leading-6 text-emerald-700">
-          Use this page to monitor group health. Click View to inspect one
-          group’s members, payout order, rounds, contributions, and payout
-          records. Use Payouts when a round becomes ready for approval,
-          rejection, or payment marking.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function StatCard({
-  title,
-  value,
-  description,
-  icon,
-  color,
-}: {
-  title: string;
-  value: number;
-  description?: string;
-  icon: React.ReactNode;
-  color: 'emerald' | 'amber' | 'blue' | 'red';
-}) {
-  const classes = {
-    emerald: 'bg-emerald-50 text-emerald-700',
-    amber: 'bg-amber-50 text-amber-700',
-    blue: 'bg-blue-50 text-blue-700',
-    red: 'bg-red-50 text-red-700',
-  };
-
-  return (
-    <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
-      <div className={`mb-4 inline-flex rounded-2xl p-3 ${classes[color]}`}>
-        {icon}
-      </div>
-
-      <p className="text-sm text-gray-500">{title}</p>
-
-      <h3 className="mt-1 text-2xl font-black text-gray-900">{value}</h3>
-
-      {description && (
-        <p className="mt-2 text-xs text-gray-500">{description}</p>
-      )}
-    </div>
-  );
-}
-
-function ValueCard({
-  title,
-  value,
-  icon,
-  color,
-}: {
-  title: string;
-  value: number;
-  icon: React.ReactNode;
-  color: 'emerald' | 'red';
-}) {
-  const classes = {
-    emerald: 'bg-emerald-50 text-emerald-700',
-    red: 'bg-red-50 text-red-700',
-  };
-
-  return (
-    <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
-      <div className={`mb-4 inline-flex rounded-2xl p-3 ${classes[color]}`}>
-        {icon}
-      </div>
-
-      <p className="text-sm text-gray-500">{title}</p>
-
-      <h3 className="mt-1 text-2xl font-black text-gray-900">
-        {formatCurrency(value)}
-      </h3>
-    </div>
-  );
-}
-
-function EmptyState() {
-  return (
-    <div className="p-10 text-center">
-      <AlertTriangle className="mx-auto mb-3 h-8 w-8 text-amber-500" />
-
-      <h3 className="text-lg font-black text-gray-900">
-        No Fund Spaces found
-      </h3>
-
-      <p className="mt-2 text-sm text-gray-500">
-        Try changing the search or status filter.
-      </p>
-    </div>
-  );
-}
-
-function FundSpaceMobileCard({ item }: { item: FundSpaceOverviewRow }) {
-  const fundSpaceId = String(item.id || '');
-  const memberCount = Number(item.member_count || 0);
-  const memberLimit = Number(item.member_limit || 0);
-  const progress = getProgress(memberCount, memberLimit);
-
-  return (
-    <div className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="font-black text-gray-900">
-            {item.name || 'Unnamed Fund Space'}
-          </h3>
-
-          <p className="mt-1 max-w-[220px] truncate text-xs text-gray-500">
-            {fundSpaceId || 'No ID'}
-          </p>
-        </div>
-
-        <span
-          className={`shrink-0 rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-            item.status
-          )}`}
-        >
-          {formatLabel(item.status || 'FORMING')}
-        </span>
-      </div>
-
-      <div className="mt-5 grid gap-3 sm:grid-cols-2">
-        <MiniInfo label="Members" value={`${memberCount}/${memberLimit || 0}`} />
-        <MiniInfo
-          label="Weekly"
-          value={formatCurrency(item.contribution_amount)}
-        />
-        <MiniInfo
-          label="Round"
-          value={`Round ${item.current_round_number || 0}`}
-        />
-        <MiniInfo label="Paid Out" value={String(item.members_paid_out || 0)} />
-      </div>
-
-      <div className="mt-5">
-        <div className="mb-2 flex items-center justify-between text-xs">
-          <span className="font-semibold text-gray-500">Progress</span>
-          <span className="font-black text-emerald-700">{progress}%</span>
-        </div>
-
-        <div className="h-2 overflow-hidden rounded-full bg-gray-100">
-          <div
-            className="h-full rounded-full bg-emerald-600"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-      </div>
-
-      <div className="mt-5 flex flex-wrap gap-2">
-        <Link
-          href={`/admin/fund-space/${fundSpaceId}`}
-          className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700"
-        >
-          <Eye size={14} />
-          View
-        </Link>
-
-        <Link
-          href="/admin/fund-space/payouts"
-          className="inline-flex items-center gap-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-100"
-        >
-          <Banknote size={14} />
-          Payouts
-        </Link>
-
-        <Link
-          href="/admin/fund-space/contributions"
-          className="inline-flex items-center gap-2 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700 hover:bg-amber-100"
-        >
-          <HandCoins size={14} />
-          Contributions
-        </Link>
-      </div>
-    </div>
-  );
-}
-
-function FundSpaceTableRow({ item }: { item: FundSpaceOverviewRow }) {
-  const memberCount = Number(item.member_count || 0);
-  const memberLimit = Number(item.member_limit || 0);
-  const progress = getProgress(memberCount, memberLimit);
-  const fundSpaceId = String(item.id || '');
-
-  return (
-    <tr className="hover:bg-gray-50">
-      <td className="px-4 py-4">
-        <div>
-          <p className="font-bold text-gray-900">
-            {item.name || 'Unnamed Fund Space'}
-          </p>
-
-          <p className="mt-1 max-w-[220px] truncate text-xs text-gray-500">
-            {fundSpaceId || 'No ID'}
-          </p>
-        </div>
-      </td>
-
-      <td className="px-4 py-4">
-        <span
-          className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-            item.status
-          )}`}
-        >
-          {formatLabel(item.status || 'FORMING')}
-        </span>
-      </td>
-
-      <td className="px-4 py-4">
-        <div>
-          <p className="font-bold text-gray-900">
-            {memberCount}/{memberLimit || 0}
-          </p>
-
-          <div className="mt-2 h-2 w-28 overflow-hidden rounded-full bg-gray-100">
-            <div
-              className="h-full rounded-full bg-emerald-600"
-              style={{ width: `${progress}%` }}
+      <section className="rounded-3xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="relative w-full lg:max-w-md">
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <input
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder="Search group name, round, amount..."
+              className="w-full rounded-2xl border border-gray-200 bg-gray-50 py-3 pl-11 pr-4 text-sm font-semibold outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-50"
             />
           </div>
+
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {quickFilters.map((filter) => (
+              <button
+                key={filter.value}
+                type="button"
+                onClick={() => setStatusFilter(filter.value)}
+                className={`shrink-0 rounded-2xl px-4 py-3 text-sm font-black transition ${
+                  statusFilter === filter.value
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
         </div>
-      </td>
+      </section>
 
-      <td className="px-4 py-4">
-        <p className="font-bold text-gray-900">
-          {formatCurrency(item.contribution_amount)}
-        </p>
-
-        <p className="mt-1 text-xs text-gray-500">Weekly per member</p>
-      </td>
-
-      <td className="px-4 py-4">
-        <p className="font-bold text-gray-900">
-          Round {item.current_round_number || 0}
-        </p>
-      </td>
-
-      <td className="px-4 py-4">
-        <p className="font-bold text-emerald-700">
-          {item.members_paid_out || 0}
-        </p>
-      </td>
-
-      <td className="px-4 py-4">
-        <p
-          className={
-            Number(item.defaulted_members || 0) > 0
-              ? 'font-bold text-red-700'
-              : 'font-bold text-gray-900'
-          }
-        >
-          {item.defaulted_members || 0}
-        </p>
-      </td>
-
-      <td className="px-4 py-4">
-        <div className="flex items-center gap-2 text-sm text-gray-600">
-          <CalendarDays size={14} />
-          {formatDate(item.start_date)}
+      <section className="space-y-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-black text-gray-950">Fund Space Groups</h2>
+            <p className="mt-1 text-sm text-gray-500">
+              Showing {filteredFundSpaces.length} of {fundSpaces.length} groups.
+            </p>
+          </div>
         </div>
-      </td>
 
-      <td className="px-4 py-4">
-        <div className="flex justify-end gap-2">
-          <Link
-            href={`/admin/fund-space/${fundSpaceId}`}
-            className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700"
-          >
-            <Eye size={14} />
-            View
-          </Link>
+        {filteredFundSpaces.length === 0 ? (
+          <div className="rounded-3xl border border-gray-100 bg-white p-8 text-center shadow-sm">
+            <Users className="mx-auto h-10 w-10 text-gray-300" />
+            <h3 className="mt-4 text-lg font-black text-gray-950">No groups found</h3>
+            <p className="mt-2 text-sm text-gray-500">
+              Try clearing the search box or selecting another filter.
+            </p>
+          </div>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-2">
+            {filteredFundSpaces.map((fundSpace) => {
+              const id = String(fundSpace.id || '');
+              const status = String(fundSpace.status || 'FORMING').toUpperCase();
+              const memberCount = Number(fundSpace.member_count || 0);
+              const memberLimit = Number(fundSpace.member_limit || 0);
+              const progress = getProgress(fundSpace.member_count, fundSpace.member_limit);
+              const startNextLoading = actionLoading === `START_NEXT_ROUND_${id}`;
 
-          <Link
-            href="/admin/fund-space/payouts"
-            className="inline-flex items-center gap-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-100"
-          >
-            <Banknote size={14} />
-            Payouts
-          </Link>
+              return (
+                <article
+                  key={id}
+                  className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm transition hover:border-emerald-200 hover:shadow-md"
+                >
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`rounded-full border px-3 py-1 text-xs font-black ${getStatusClass(
+                            fundSpace.status
+                          )}`}
+                        >
+                          {formatLabel(status)}
+                        </span>
+                        <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-black text-gray-600">
+                          Round {fundSpace.current_round_number || 1}
+                        </span>
+                      </div>
 
-          <Link
-            href="/admin/fund-space/contributions"
-            className="inline-flex items-center gap-2 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700 hover:bg-amber-100"
-          >
-            <HandCoins size={14} />
-            Contributions
-          </Link>
-        </div>
-      </td>
-    </tr>
-  );
-}
+                      <h3 className="mt-3 text-xl font-black text-gray-950">
+                        {fundSpace.name || 'Unnamed Fund Space'}
+                      </h3>
 
-function MiniInfo({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl bg-gray-50 p-4">
-      <p className="text-xs font-bold uppercase tracking-wide text-gray-400">
-        {label}
-      </p>
+                      <p className="mt-2 text-sm leading-6 text-gray-500">
+                        {memberCount} of {memberLimit || 'not set'} members joined · Weekly contribution{' '}
+                        <span className="font-black text-gray-800">
+                          {formatCurrency(fundSpace.contribution_amount)}
+                        </span>
+                      </p>
+                    </div>
+                  </div>
 
-      <p className="mt-1 font-black text-gray-900">{value}</p>
+                  <div className="mt-5">
+                    <div className="mb-2 flex items-center justify-between text-xs font-black text-gray-500">
+                      <span>Membership progress</span>
+                      <span>{progress}%</span>
+                    </div>
+                    <div className="h-3 overflow-hidden rounded-full bg-gray-100">
+                      <div
+                        className="h-full rounded-full bg-emerald-600 transition-all"
+                        style={{ width: `${progress}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-2xl bg-gray-50 p-4">
+                      <p className="text-xs font-black text-gray-500">Start Date</p>
+                      <p className="mt-1 text-sm font-black text-gray-900">
+                        {formatDate(fundSpace.start_date)}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl bg-gray-50 p-4">
+                      <p className="text-xs font-black text-gray-500">Paid Out</p>
+                      <p className="mt-1 text-sm font-black text-gray-900">
+                        {Number(fundSpace.members_paid_out || 0)} members
+                      </p>
+                    </div>
+                    <div className="rounded-2xl bg-gray-50 p-4">
+                      <p className="text-xs font-black text-gray-500">Defaulted</p>
+                      <p className="mt-1 text-sm font-black text-gray-900">
+                        {Number(fundSpace.defaulted_members || 0)} members
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <Link
+                      href={`/admin/fund-space/${id}`}
+                      className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-black text-white transition hover:bg-emerald-700"
+                    >
+                      View Details
+                      <ArrowRight className="h-4 w-4" />
+                    </Link>
+
+                    <Link
+                      href={`/admin/fund-space/contributions?fund_space_id=${id}`}
+                      className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-black text-gray-700 transition hover:bg-gray-50"
+                    >
+                      <HandCoins className="h-4 w-4" />
+                      Contributions
+                    </Link>
+
+                    <Link
+                      href={`/admin/fund-space/payouts?fund_space_id=${id}`}
+                      className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-black text-gray-700 transition hover:bg-gray-50"
+                    >
+                      <Banknote className="h-4 w-4" />
+                      Payouts
+                    </Link>
+
+                    <button
+                      type="button"
+                      disabled={startNextLoading || status !== 'ACTIVE'}
+                      onClick={() =>
+                        runFundSpaceAction('START_NEXT_ROUND', {
+                          fund_space_id: id,
+                        })
+                      }
+                      className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-black text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {startNextLoading ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <ShieldCheck className="h-4 w-4" />
+                      )}
+                      Next Round
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
     </div>
-  );
-}
-
-function TableHead({
-  children,
-  align = 'left',
-}: {
-  children: React.ReactNode;
-  align?: 'left' | 'right';
-}) {
-  return (
-    <th
-      className={`px-4 py-4 text-xs font-black uppercase tracking-wide text-gray-500 ${
-        align === 'right' ? 'text-right' : 'text-left'
-      }`}
-    >
-      {children}
-    </th>
   );
 }

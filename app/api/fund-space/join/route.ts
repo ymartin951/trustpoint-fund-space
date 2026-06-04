@@ -38,6 +38,29 @@ type FundSpaceMemberRow =
 type NotificationInsert =
   Database['public']['Tables']['notifications']['Insert'];
 
+type JoinRequestBody = {
+  contribution_amount?: number | string;
+  customer_id?: string | null;
+  agreement_accepted?: boolean;
+  agreement_version_id?: string | null;
+};
+
+type EligibilityResult = {
+  user_id?: string;
+  contribution_amount?: number;
+  is_eligible?: boolean;
+  missing_requirements?: string[];
+  has_verified_identity?: boolean;
+  has_emergency_contact?: boolean;
+  has_approved_guarantor?: boolean;
+  approved_guarantor_count?: number;
+  has_business_or_employment_proof?: boolean;
+  eligible_for_50?: boolean;
+  eligible_for_100?: boolean;
+  eligible_for_200?: boolean;
+  eligible_for_500?: boolean;
+};
+
 function getBearerToken(request: Request): string | null {
   const authHeader =
     request.headers.get('authorization') ||
@@ -50,6 +73,21 @@ function getBearerToken(request: Request): string | null {
   const token = authHeader.replace('Bearer ', '').trim();
 
   return token || null;
+}
+
+function getRequestIp(request: Request) {
+  const forwardedFor = request.headers.get('x-forwarded-for');
+  const realIp = request.headers.get('x-real-ip');
+
+  if (forwardedFor) {
+    return forwardedFor.split(',')[0]?.trim() || null;
+  }
+
+  return realIp?.trim() || null;
+}
+
+function getRequestUserAgent(request: Request) {
+  return request.headers.get('user-agent') || null;
 }
 
 async function getCurrentUser(request: Request) {
@@ -160,6 +198,63 @@ function validateMemberCanJoin(profile: ProfileLite) {
   }
 
   return null;
+}
+
+function formatEligibilityMessage({
+  isAgentAddingCustomer,
+  memberName,
+  contributionAmount,
+  missingRequirements,
+}: {
+  isAgentAddingCustomer: boolean;
+  memberName: string | null;
+  contributionAmount: number;
+  missingRequirements: string[];
+}) {
+  const targetName = isAgentAddingCustomer
+    ? memberName || 'This customer'
+    : 'Your account';
+
+  const requirementText =
+    missingRequirements.length > 0
+      ? missingRequirements.join(' ')
+      : 'Required safety information is missing.';
+
+  return `${targetName} is not eligible to join the GH₵${contributionAmount} Fund Space yet. ${requirementText}`;
+}
+
+async function checkMemberEligibility({
+  userId,
+  contributionAmount,
+}: {
+  userId: string;
+  contributionAmount: number;
+}) {
+  const rpcClient = adminSupabase as any;
+
+  const { data, error } = await rpcClient.rpc(
+    'get_member_fund_space_eligibility',
+    {
+      p_user_id: userId,
+      p_contribution_amount: contributionAmount,
+    }
+  );
+
+  if (error) {
+    console.error('Fund Space eligibility check error:', error);
+
+    return {
+      eligibility: null as EligibilityResult | null,
+      error:
+        error.message ||
+        'Could not check Fund Space eligibility requirements.',
+    };
+  }
+
+  return {
+    eligibility: data as EligibilityResult,
+    error: null,
+  };
 }
 
 async function checkAgentCustomerRelationship(
@@ -328,6 +423,47 @@ async function sendNotification(input: {
   }
 }
 
+async function acceptAgreementForMember({
+  userId,
+  fundSpaceId,
+  request,
+  acceptedBy,
+  mode,
+}: {
+  userId: string;
+  fundSpaceId: string;
+  request: Request;
+  acceptedBy: string;
+  mode: 'SELF_JOIN' | 'AGENT_CUSTOMER_JOIN';
+}) {
+  const rpcClient = adminSupabase as any;
+
+  const { data, error } = await rpcClient.rpc(
+    'accept_current_fund_space_agreement',
+    {
+      p_user_id: userId,
+      p_fund_space_id: fundSpaceId,
+      p_ip_address: getRequestIp(request),
+      p_user_agent: getRequestUserAgent(request),
+      p_device_info: {
+        source: 'fund_space_join_api',
+        mode,
+        accepted_by: acceptedBy,
+        accepted_for_user_id: userId,
+      },
+    }
+  );
+
+  if (error) {
+    console.error('Fund Space agreement acceptance error:', error);
+    throw new Error(
+      error.message || 'Could not record Fund Space agreement acceptance.'
+    );
+  }
+
+  return data;
+}
+
 function buildJoinSuccessMessage({
   isAgentAddingCustomer,
   groupIsActive,
@@ -341,19 +477,19 @@ function buildJoinSuccessMessage({
     if (groupIsActive) {
       return `${
         fullName || 'Customer'
-      } has been added to Fund Space successfully. The group is now active and Round 1 has started.`;
+      } has been added to Fund Space successfully. The agreement was recorded, the group is now active, and Round 1 has started.`;
     }
 
     return `${
       fullName || 'Customer'
-    } has been added to Fund Space successfully. The group is still forming.`;
+    } has been added to Fund Space successfully. The agreement was recorded and the group is still forming.`;
   }
 
   if (groupIsActive) {
-    return 'You have joined Fund Space successfully. Your group is now active and Round 1 has started.';
+    return 'You accepted the agreement and joined Fund Space successfully. Your group is now active and Round 1 has started.';
   }
 
-  return 'You have joined Fund Space successfully. Your group is still forming.';
+  return 'You accepted the agreement and joined Fund Space successfully. Your group is still forming.';
 }
 
 export async function POST(request: Request) {
@@ -364,7 +500,9 @@ export async function POST(request: Request) {
       return errorResponse;
     }
 
-    const body = await request.json().catch(() => null);
+    const body = (await request.json().catch(() => null)) as
+      | JoinRequestBody
+      | null;
 
     if (!body) {
       return NextResponse.json(
@@ -377,6 +515,7 @@ export async function POST(request: Request) {
     }
 
     const contributionAmount = Number(body.contribution_amount);
+    const agreementAccepted = body.agreement_accepted === true;
 
     const customerId =
       typeof body.customer_id === 'string' && body.customer_id.trim()
@@ -390,6 +529,17 @@ export async function POST(request: Request) {
         {
           success: false,
           message: 'Please select a valid contribution amount.',
+        },
+        { status: 400 }
+      );
+    }
+
+    if (!agreementAccepted) {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            'Please accept the TrustPoint Fund Space agreement before joining.',
         },
         { status: 400 }
       );
@@ -531,6 +681,46 @@ export async function POST(request: Request) {
       );
     }
 
+    const { eligibility, error: eligibilityError } =
+      await checkMemberEligibility({
+        userId: memberProfile.id,
+        contributionAmount,
+      });
+
+    if (eligibilityError || !eligibility) {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            eligibilityError ||
+            'Could not check Fund Space eligibility requirements.',
+        },
+        { status: 500 }
+      );
+    }
+
+    if (eligibility.is_eligible !== true) {
+      const missingRequirements = Array.isArray(
+        eligibility.missing_requirements
+      )
+        ? eligibility.missing_requirements
+        : [];
+
+      return NextResponse.json(
+        {
+          success: false,
+          message: formatEligibilityMessage({
+            isAgentAddingCustomer,
+            memberName: memberProfile.full_name,
+            contributionAmount,
+            missingRequirements,
+          }),
+          eligibility,
+        },
+        { status: 403 }
+      );
+    }
+
     const { existingMember, error: existingMemberError } =
       await checkExistingFundSpaceMembership(memberProfile.id);
 
@@ -549,7 +739,9 @@ export async function POST(request: Request) {
         {
           success: false,
           message: isAgentAddingCustomer
-            ? `${memberProfile.full_name || 'This customer'} is already in a Fund Space group.`
+            ? `${
+                memberProfile.full_name || 'This customer'
+              } is already in a Fund Space group.`
             : 'You are already in a Fund Space group.',
           fund_space_id: existingMember.fund_space_id,
         },
@@ -586,6 +778,14 @@ export async function POST(request: Request) {
       );
     }
 
+    const agreementResult = await acceptAgreementForMember({
+      userId: memberProfile.id,
+      fundSpaceId: selectedFundSpace.id,
+      request,
+      acceptedBy: actorUser.id,
+      mode: isAgentAddingCustomer ? 'AGENT_CUSTOMER_JOIN' : 'SELF_JOIN',
+    });
+
     const nextPosition = selectedFundSpaceMemberCount + 1;
     const now = new Date().toISOString();
 
@@ -599,12 +799,6 @@ export async function POST(request: Request) {
         joined_at: now,
         joined_by_agent: joinedByAgent,
         has_received_payout: false,
-
-        /*
-          This tracks the customer's join position before activation.
-          Do not set payout_order here.
-          payout_order is assigned later by activate_fund_space().
-        */
         position_number: nextPosition,
       })
       .select('*')
@@ -622,7 +816,9 @@ export async function POST(request: Request) {
           success: false,
           message: isDuplicate
             ? isAgentAddingCustomer
-              ? `${memberProfile.full_name || 'This customer'} is already in a Fund Space group.`
+              ? `${
+                  memberProfile.full_name || 'This customer'
+                } is already in a Fund Space group.`
               : 'You are already in a Fund Space group.'
             : isAgentAddingCustomer
               ? memberError?.message ||
@@ -664,6 +860,7 @@ export async function POST(request: Request) {
               'The customer was added to Fund Space, but the group could not be activated.',
             fund_space_id: selectedFundSpace.id,
             member: createdMember,
+            agreement: agreementResult,
           },
           { status: 500 }
         );
@@ -693,6 +890,7 @@ export async function POST(request: Request) {
             'The member was added, but the updated group could not be loaded.',
           fund_space_id: selectedFundSpace.id,
           member: createdMember,
+          agreement: agreementResult,
         },
         { status: 500 }
       );
@@ -706,8 +904,8 @@ export async function POST(request: Request) {
         userId: memberProfile.id,
         title: 'Added to Fund Space',
         message: groupIsActive
-          ? 'Your agent has added you to a TrustPoint Fund Space group. The group is now active and Round 1 has started.'
-          : `Your agent has added you to a TrustPoint Fund Space group. The group will activate when it reaches ${memberLimit} verified members.`,
+          ? 'Your agent has added you to a TrustPoint Fund Space group. The agreement has been recorded, the group is now active, and Round 1 has started.'
+          : `Your agent has added you to a TrustPoint Fund Space group. The agreement has been recorded and the group will activate when it reaches ${memberLimit} verified members.`,
         type: 'SUCCESS',
         relatedEntityId: selectedFundSpace.id,
         relatedEntityType: 'fund_space',
@@ -719,10 +917,10 @@ export async function POST(request: Request) {
         message: groupIsActive
           ? `You added ${
               memberProfile.full_name || 'this customer'
-            } to Fund Space successfully. The group is now active and Round 1 has started.`
+            } to Fund Space successfully. The agreement was recorded, the group is now active, and Round 1 has started.`
           : `You added ${
               memberProfile.full_name || 'this customer'
-            } to Fund Space successfully. The group is still forming.`,
+            } to Fund Space successfully. The agreement was recorded and the group is still forming.`,
         type: 'SUCCESS',
         relatedEntityId: selectedFundSpace.id,
         relatedEntityType: 'fund_space',
@@ -732,8 +930,8 @@ export async function POST(request: Request) {
         userId: memberProfile.id,
         title: 'Fund Space Joined',
         message: groupIsActive
-          ? 'You have joined a Fund Space group. Your group is now active and the first contribution round has started.'
-          : `You have joined a Fund Space group. Your group will activate when it reaches ${memberLimit} verified members.`,
+          ? 'You accepted the Fund Space agreement and joined a group. Your group is now active and the first contribution round has started.'
+          : `You accepted the Fund Space agreement and joined a group. Your group will activate when it reaches ${memberLimit} verified members.`,
         type: 'SUCCESS',
         relatedEntityId: selectedFundSpace.id,
         relatedEntityType: 'fund_space',
@@ -750,21 +948,15 @@ export async function POST(request: Request) {
       success: true,
       mode: isAgentAddingCustomer ? 'AGENT_ADDED_CUSTOMER' : 'CUSTOMER_JOINED',
       message: successMessage,
-
-      /*
-        Important: this top-level fund_space_id allows the join page to
-        redirect directly to /dashboard/fund-space/[id].
-      */
       fund_space_id: finalFundSpace.id,
-
       fund_space: {
         ...finalFundSpace,
         member_count: updatedMemberCount,
         max_members: memberLimit,
       },
-
       member: createdMember,
-
+      agreement: agreementResult,
+      eligibility,
       customer: isAgentAddingCustomer
         ? {
             id: memberProfile.id,
@@ -773,7 +965,6 @@ export async function POST(request: Request) {
             status: memberProfile.status,
           }
         : null,
-
       joined_by_agent: joinedByAgent,
       activation_result: activationResult,
     });

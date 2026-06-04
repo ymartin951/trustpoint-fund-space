@@ -1,10 +1,21 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 
-import { createClient } from '@/lib/supabase/server';
-import type { Database } from '@/lib/supabase/database.types';
+export const dynamic = 'force-dynamic';
 
-type FundSpaceOverviewRow =
-  Database['public']['Views']['admin_fund_space_overview']['Row'];
+type FundSpaceOverviewRow = {
+  id: string | null;
+  name: string | null;
+  status: string | null;
+  contribution_amount: number | null;
+  created_at: string | null;
+  current_round_number: number | null;
+  defaulted_members: number | null;
+  member_count: number | null;
+  member_limit: number | null;
+  members_paid_out: number | null;
+  start_date: string | null;
+};
 
 type OverviewStats = {
   total_groups: number;
@@ -18,14 +29,59 @@ type OverviewStats = {
   expected_weekly_volume: number;
 };
 
+type AdminFundSpaceAction =
+  | 'SEND_DEADLINE_REMINDERS'
+  | 'PROCESS_DUE_ROUNDS'
+  | 'CHECK_ROUND_READY_FOR_PAYOUT'
+  | 'START_NEXT_ROUND';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl) {
+  throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL');
+}
+
+if (!serviceRoleKey) {
+  throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY');
+}
+
+const adminSupabase = createSupabaseClient(supabaseUrl, serviceRoleKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+  },
+});
+
+function getBearerToken(request: NextRequest) {
+  const authHeader = request.headers.get('authorization') || '';
+  const [scheme, token] = authHeader.split(' ');
+
+  if (scheme?.toLowerCase() !== 'bearer' || !token) {
+    return null;
+  }
+
+  return token;
+}
+
+function normalizeRole(role: string | null | undefined) {
+  return String(role || '')
+    .trim()
+    .toUpperCase()
+    .replaceAll(' ', '_')
+    .replaceAll('-', '_');
+}
+
 function isAdminRole(role: string | null | undefined) {
-  return role === 'ADMIN' || role === 'SUPER_ADMIN';
+  const normalizedRole = normalizeRole(role);
+
+  return normalizedRole === 'ADMIN' || normalizedRole === 'SUPER_ADMIN';
 }
 
 function calculateStats(rows: FundSpaceOverviewRow[]): OverviewStats {
   return rows.reduce<OverviewStats>(
     (stats, row) => {
-      const status = row.status || 'FORMING';
+      const status = String(row.status || 'FORMING').toUpperCase();
       const memberCount = Number(row.member_count || 0);
       const defaultedMembers = Number(row.defaulted_members || 0);
       const membersPaidOut = Number(row.members_paid_out || 0);
@@ -58,49 +114,104 @@ function calculateStats(rows: FundSpaceOverviewRow[]): OverviewStats {
   );
 }
 
-export async function GET() {
-  try {
-    const supabase = await createClient();
+async function requireAdmin(request: NextRequest) {
+  const token = getBearerToken(request);
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError || !user) {
-      return NextResponse.json(
-        { success: false, message: 'Unauthorized. Please log in again.' },
-        { status: 401 }
-      );
-    }
-
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('id, role, status')
-      .eq('id', user.id)
-      .maybeSingle();
-
-    if (profileError) {
-      return NextResponse.json(
+  if (!token) {
+    return {
+      profile: null,
+      errorResponse: NextResponse.json(
         {
           success: false,
-          message: profileError.message || 'Unable to verify admin profile.',
+          message: 'Unauthorized. Please log in again.',
+        },
+        { status: 401 }
+      ),
+    };
+  }
+
+  const {
+    data: { user },
+    error: userError,
+  } = await adminSupabase.auth.getUser(token);
+
+  if (userError || !user) {
+    return {
+      profile: null,
+      errorResponse: NextResponse.json(
+        {
+          success: false,
+          message: 'Unauthorized. Please log in again.',
+        },
+        { status: 401 }
+      ),
+    };
+  }
+
+  const { data: profile, error: profileError } = await adminSupabase
+    .from('profiles')
+    .select('id, full_name, email, phone, role, status')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  if (profileError) {
+    return {
+      profile: null,
+      errorResponse: NextResponse.json(
+        {
+          success: false,
+          message:
+            profileError.message || 'Unable to verify admin profile.',
         },
         { status: 500 }
-      );
-    }
+      ),
+    };
+  }
 
-    if (!profile || !isAdminRole(profile.role)) {
-      return NextResponse.json(
+  if (!profile) {
+    return {
+      profile: null,
+      errorResponse: NextResponse.json(
         {
           success: false,
-          message: 'Access denied. Admin account required.',
+          message:
+            'No profile record was found for the logged-in account. Please make sure this auth user exists in the profiles table.',
+          user_id: user.id,
+          user_email: user.email,
         },
         { status: 403 }
-      );
+      ),
+    };
+  }
+
+  if (!isAdminRole(profile.role)) {
+    return {
+      profile: null,
+      errorResponse: NextResponse.json(
+        {
+          success: false,
+          message: `Access denied. Admin account required. Current role: ${profile.role}`,
+        },
+        { status: 403 }
+      ),
+    };
+  }
+
+  return {
+    profile,
+    errorResponse: null,
+  };
+}
+
+export async function GET(request: NextRequest) {
+  try {
+    const { errorResponse } = await requireAdmin(request);
+
+    if (errorResponse) {
+      return errorResponse;
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await adminSupabase
       .from('admin_fund_space_overview')
       .select('*')
       .order('created_at', { ascending: false });
@@ -122,18 +233,174 @@ export async function GET() {
       data: rows,
       stats: calculateStats(rows),
     });
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Admin Fund Space overview API error:', error);
-
-    const message =
-      error instanceof Error
-        ? error.message
-        : 'Unable to load Fund Space overview.';
 
     return NextResponse.json(
       {
         success: false,
-        message,
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Unable to load Fund Space overview.',
+      },
+      { status: 500 }
+    );
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const { errorResponse } = await requireAdmin(request);
+
+    if (errorResponse) {
+      return errorResponse;
+    }
+
+    const body = await request.json().catch(() => ({}));
+
+    const action = String(body.action || '').toUpperCase() as AdminFundSpaceAction;
+    const roundId = String(body.round_id || '').trim();
+    const fundSpaceId = String(body.fund_space_id || '').trim();
+
+    const rpcClient = adminSupabase as any;
+
+    if (action === 'SEND_DEADLINE_REMINDERS') {
+      const { data, error } = await rpcClient.rpc(
+        'send_fund_space_deadline_reminders',
+        {
+          p_round_id: roundId || undefined,
+        }
+      );
+
+      if (error) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: error.message || 'Unable to send deadline reminders.',
+          },
+          { status: 500 }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: 'Deadline reminders processed successfully.',
+        data,
+      });
+    }
+
+    if (action === 'PROCESS_DUE_ROUNDS') {
+      const { data, error } = await rpcClient.rpc(
+        'process_due_fund_space_rounds'
+      );
+
+      if (error) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: error.message || 'Unable to process due rounds.',
+          },
+          { status: 500 }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: 'Due rounds processed successfully.',
+        data,
+      });
+    }
+
+    if (action === 'CHECK_ROUND_READY_FOR_PAYOUT') {
+      if (!roundId) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'round_id is required to check payout readiness.',
+          },
+          { status: 400 }
+        );
+      }
+
+      const { data, error } = await rpcClient.rpc(
+        'check_round_ready_for_payout',
+        {
+          p_round_id: roundId,
+        }
+      );
+
+      if (error) {
+        return NextResponse.json(
+          {
+            success: false,
+            message:
+              error.message || 'Unable to check round payout readiness.',
+          },
+          { status: 500 }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: 'Round payout readiness checked successfully.',
+        data,
+      });
+    }
+
+    if (action === 'START_NEXT_ROUND') {
+      if (!fundSpaceId) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'fund_space_id is required to start the next round.',
+          },
+          { status: 400 }
+        );
+      }
+
+      const { data, error } = await rpcClient.rpc(
+        'start_next_fund_space_round',
+        {
+          p_fund_space_id: fundSpaceId,
+        }
+      );
+
+      if (error) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: error.message || 'Unable to start next Fund Space round.',
+          },
+          { status: 500 }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: 'Next round started successfully.',
+        data,
+      });
+    }
+
+    return NextResponse.json(
+      {
+        success: false,
+        message:
+          'Unsupported action. Use SEND_DEADLINE_REMINDERS, PROCESS_DUE_ROUNDS, CHECK_ROUND_READY_FOR_PAYOUT, or START_NEXT_ROUND.',
+      },
+      { status: 400 }
+    );
+  } catch (error) {
+    console.error('Admin Fund Space action API error:', error);
+
+    return NextResponse.json(
+      {
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Unable to process Fund Space admin action.',
       },
       { status: 500 }
     );

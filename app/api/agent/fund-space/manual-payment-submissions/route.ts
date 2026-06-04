@@ -6,6 +6,13 @@ import type { Database } from '@/lib/database.types';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+type AppRole = 'USER' | 'AGENT' | 'ADMIN' | 'SUPER_ADMIN';
+
+type ContributionOwnershipRow = {
+  id: string;
+  user_id: string;
+};
+
 function getSupabaseUrl() {
   const supabaseUrl =
     process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -76,6 +83,21 @@ async function getAccessToken(request: NextRequest) {
   return authorizationHeader.replace('Bearer ', '').trim();
 }
 
+function normalizeRole(role: string | null | undefined): AppRole | 'UNKNOWN' {
+  const value = String(role || '')
+    .trim()
+    .toUpperCase()
+    .replaceAll(' ', '_')
+    .replaceAll('-', '_');
+
+  if (value === 'SUPER_ADMIN') return 'SUPER_ADMIN';
+  if (value === 'ADMIN') return 'ADMIN';
+  if (value === 'AGENT') return 'AGENT';
+  if (value === 'USER') return 'USER';
+
+  return 'UNKNOWN';
+}
+
 function parseContributionIds(value: string | null) {
   if (!value) return [];
 
@@ -87,6 +109,32 @@ function parseContributionIds(value: string | null) {
         .filter(Boolean)
     )
   );
+}
+
+async function loadSubmissionsForContributions(
+  serviceSupabase: ReturnType<typeof createServiceClient>,
+  contributionIds: string[]
+) {
+  if (contributionIds.length === 0) {
+    return {
+      submissions: [],
+      error: null,
+    };
+  }
+
+  const { data, error } = await serviceSupabase
+    .from('manual_payment_submissions')
+    .select(
+      'id, contribution_id, fund_space_id, user_id, agent_id, status, transaction_reference, total_amount_paid, rejection_reason, created_at, reviewed_at'
+    )
+    .in('contribution_id', contributionIds)
+    .in('status', ['PENDING_REVIEW', 'REJECTED'])
+    .order('created_at', { ascending: false });
+
+  return {
+    submissions: data || [],
+    error,
+  };
 }
 
 export async function GET(request: NextRequest) {
@@ -131,12 +179,18 @@ export async function GET(request: NextRequest) {
       return errorResponse('Agent profile was not found.', 403);
     }
 
-    if (profile.status !== 'ACTIVE') {
-      return errorResponse('Your agent account is not active.', 403);
+    const role = normalizeRole(profile.role);
+    const status = String(profile.status || '').toUpperCase();
+
+    if (status !== 'ACTIVE') {
+      return errorResponse('Your account is not active.', 403);
     }
 
-    if (profile.role !== 'AGENT' && profile.role !== 'ADMIN' && profile.role !== 'SUPER_ADMIN') {
-      return errorResponse('Only agents can access these payment submissions.', 403);
+    if (!['AGENT', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+      return errorResponse(
+        'Only agents, admins, or super admins can access these payment submissions.',
+        403
+      );
     }
 
     const { data: contributionRows, error: contributionError } =
@@ -148,97 +202,112 @@ export async function GET(request: NextRequest) {
     if (contributionError) {
       console.error('Agent contribution ownership lookup error:', contributionError);
 
-      return errorResponse(
-        'Unable to verify contribution ownership.',
-        500
-      );
+      return errorResponse('Unable to verify contribution ownership.', 500);
     }
 
-    const customerIds = Array.from(
-      new Set((contributionRows || []).map((item) => item.user_id).filter(Boolean))
+    const contributions = (contributionRows || []) as ContributionOwnershipRow[];
+
+    if (contributions.length === 0) {
+      return NextResponse.json({
+        success: true,
+        submissions: [],
+      });
+    }
+
+    /*
+      Important rule:
+      - ADMIN and SUPER_ADMIN can load pending/rejected submissions for the requested contributions.
+      - AGENT can load:
+        1. Their own Fund Space contribution submissions.
+        2. Submissions for customers assigned to them.
+      - AGENT must still be blocked from viewing unassigned customers.
+    */
+    if (role === 'ADMIN' || role === 'SUPER_ADMIN') {
+      const { submissions, error } = await loadSubmissionsForContributions(
+        serviceSupabase,
+        contributionIds
+      );
+
+      if (error) {
+        console.error('Manual payment submissions load error:', error);
+
+        return errorResponse('Unable to load MoMo verification submissions.', 500);
+      }
+
+      return NextResponse.json({
+        success: true,
+        submissions,
+      });
+    }
+
+    const ownContributionIds = contributions
+      .filter((item) => item.user_id === user.id)
+      .map((item) => item.id);
+
+    const customerIdsNeedingAssignmentCheck = Array.from(
+      new Set(
+        contributions
+          .filter((item) => item.user_id !== user.id)
+          .map((item) => item.user_id)
+          .filter(Boolean)
+      )
     );
 
-    if (
-      profile.role === 'AGENT' &&
-      customerIds.length > 0
-    ) {
+    let assignedCustomerIds = new Set<string>();
+
+    if (customerIdsNeedingAssignmentCheck.length > 0) {
       const { data: assignedCustomers, error: assignedError } =
         await serviceSupabase
           .from('agent_customers')
           .select('customer_id')
           .eq('agent_id', user.id)
-          .in('customer_id', customerIds);
+          .in('customer_id', customerIdsNeedingAssignmentCheck);
 
       if (assignedError) {
         console.error('Agent assigned customers lookup error:', assignedError);
 
-        return errorResponse(
-          'Unable to verify assigned customers.',
-          500
-        );
+        return errorResponse('Unable to verify assigned customers.', 500);
       }
 
-      const assignedCustomerSet = new Set(
-        (assignedCustomers || []).map((item) => item.customer_id)
+      assignedCustomerIds = new Set(
+        (assignedCustomers || [])
+          .map((item) => item.customer_id)
+          .filter(Boolean)
       );
+    }
 
-      const allowedContributionIds = (contributionRows || [])
-        .filter((item) => assignedCustomerSet.has(item.user_id))
-        .map((item) => item.id);
+    const assignedCustomerContributionIds = contributions
+      .filter(
+        (item) =>
+          item.user_id !== user.id && assignedCustomerIds.has(item.user_id)
+      )
+      .map((item) => item.id);
 
-      if (allowedContributionIds.length === 0) {
-        return NextResponse.json({
-          success: true,
-          submissions: [],
-        });
-      }
+    const allowedContributionIds = Array.from(
+      new Set([...ownContributionIds, ...assignedCustomerContributionIds])
+    );
 
-      const { data: submissions, error: submissionsError } =
-        await serviceSupabase
-          .from('manual_payment_submissions')
-          .select(
-            'id, contribution_id, fund_space_id, user_id, agent_id, status, transaction_reference, total_amount_paid, rejection_reason, created_at, reviewed_at'
-          )
-          .in('contribution_id', allowedContributionIds)
-          .in('status', ['PENDING_REVIEW', 'REJECTED'])
-          .order('created_at', { ascending: false });
-
-      if (submissionsError) {
-        console.error('Agent manual payment submissions load error:', submissionsError);
-
-        return errorResponse(
-          'Unable to load MoMo verification submissions.',
-          500
-        );
-      }
-
+    if (allowedContributionIds.length === 0) {
       return NextResponse.json({
         success: true,
-        submissions: submissions || [],
+        submissions: [],
       });
     }
 
-    const { data: submissions, error: submissionsError } = await serviceSupabase
-      .from('manual_payment_submissions')
-      .select(
-        'id, contribution_id, fund_space_id, user_id, agent_id, status, transaction_reference, total_amount_paid, rejection_reason, created_at, reviewed_at'
-      )
-      .in('contribution_id', contributionIds)
-      .in('status', ['PENDING_REVIEW', 'REJECTED'])
-      .order('created_at', { ascending: false });
+    const { submissions, error } = await loadSubmissionsForContributions(
+      serviceSupabase,
+      allowedContributionIds
+    );
 
-    if (submissionsError) {
-      console.error('Manual payment submissions load error:', submissionsError);
+    if (error) {
+      console.error('Agent manual payment submissions load error:', error);
 
-      return errorResponse(
-        'Unable to load MoMo verification submissions.',
-        500
-      );
+      return errorResponse('Unable to load MoMo verification submissions.', 500);
     }
 
     return NextResponse.json({
       success: true,
-      submissions: submissions || [],
+      submissions,
     });
   } catch (error) {
     console.error('Agent manual submissions route error:', error);

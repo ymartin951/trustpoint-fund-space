@@ -27,6 +27,8 @@ import {
   X,
   XCircle,
 } from "lucide-react";
+
+import TrustShieldCard from "@/components/trust-shield/TrustShieldCard";
 import { supabase } from "../../../../src/lib/supabase/client";
 
 type Customer = {
@@ -120,6 +122,18 @@ type CustomerResponse = {
   };
 };
 
+type TrustShieldSummary = {
+  trust_score: number;
+  trust_level_label: string;
+  default_risk_level: string;
+};
+
+type TrustShieldApiResponse = {
+  success: boolean;
+  message?: string;
+  trust_shield?: TrustShieldSummary;
+};
+
 function formatValue(value?: string | number | boolean | null) {
   if (value === null || value === undefined || value === "") {
     return "Not provided";
@@ -211,6 +225,26 @@ function statusIcon(status?: string | null) {
   }
 
   return <Clock size={15} />;
+}
+
+function trustScorePanelClass(score: number) {
+  if (score >= 85) {
+    return "border-emerald-200 bg-emerald-50 text-emerald-900";
+  }
+
+  if (score >= 70) {
+    return "border-teal-200 bg-teal-50 text-teal-900";
+  }
+
+  if (score >= 55) {
+    return "border-amber-200 bg-amber-50 text-amber-900";
+  }
+
+  if (score >= 25) {
+    return "border-orange-200 bg-orange-50 text-orange-900";
+  }
+
+  return "border-red-200 bg-red-50 text-red-900";
 }
 
 function InfoItem({
@@ -332,15 +366,51 @@ export default function AgentCustomerDetailsPage() {
 
   const [loading, setLoading] = useState(true);
   const [resubmitLoading, setResubmitLoading] = useState(false);
+  const [trustShieldLoading, setTrustShieldLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [data, setData] = useState<CustomerResponse | null>(null);
+  const [trustShieldSummary, setTrustShieldSummary] =
+    useState<TrustShieldSummary | null>(null);
 
   const [resubmitModalOpen, setResubmitModalOpen] = useState(false);
   const [resubmissionNote, setResubmissionNote] = useState("");
   const [idFrontFile, setIdFrontFile] = useState<File | null>(null);
   const [idBackFile, setIdBackFile] = useState<File | null>(null);
   const [selfieFile, setSelfieFile] = useState<File | null>(null);
+
+  async function loadTrustShield(accessToken: string, targetUserId: string) {
+    try {
+      setTrustShieldLoading(true);
+
+      const response = await fetch(
+        `/api/trust-shield/profile?user_id=${encodeURIComponent(targetUserId)}`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      );
+
+      const result = (await response.json()) as TrustShieldApiResponse;
+
+      if (!response.ok || !result.success || !result.trust_shield) {
+        setTrustShieldSummary(null);
+        return;
+      }
+
+      setTrustShieldSummary(result.trust_shield);
+    } catch (error) {
+      console.warn(
+        "Customer Trust Shield summary warning:",
+        error instanceof Error ? error.message : error
+      );
+      setTrustShieldSummary(null);
+    } finally {
+      setTrustShieldLoading(false);
+    }
+  }
 
   async function loadCustomer() {
     try {
@@ -394,7 +464,11 @@ export default function AgentCustomerDetailsPage() {
         );
       }
 
-      setData(result as CustomerResponse);
+      const loadedData = result as CustomerResponse;
+
+      setData(loadedData);
+
+      await loadTrustShield(session.access_token, loadedData.customer.id);
     } catch (error) {
       const message =
         error instanceof Error
@@ -407,7 +481,9 @@ export default function AgentCustomerDetailsPage() {
     }
   }
 
-  async function handleResubmitVerification(event: React.FormEvent<HTMLFormElement>) {
+  async function handleResubmitVerification(
+    event: React.FormEvent<HTMLFormElement>
+  ) {
     event.preventDefault();
 
     try {
@@ -419,7 +495,12 @@ export default function AgentCustomerDetailsPage() {
         throw new Error("Customer ID is missing from the page URL.");
       }
 
-      if (!idFrontFile && !idBackFile && !selfieFile && !resubmissionNote.trim()) {
+      if (
+        !idFrontFile &&
+        !idBackFile &&
+        !selfieFile &&
+        !resubmissionNote.trim()
+      ) {
         throw new Error(
           "Please upload at least one corrected document or add a resubmission note."
         );
@@ -510,6 +591,15 @@ export default function AgentCustomerDetailsPage() {
   const verificationRequest = data?.verification_request;
   const reviewedByProfile = data?.reviewed_by_profile;
 
+  const currentTrustScore =
+    trustShieldSummary?.trust_score ?? customer?.trust_score ?? 0;
+
+  const currentTrustLevel =
+    trustShieldSummary?.trust_level_label || "Trust Shield Score";
+
+  const currentDefaultRisk =
+    trustShieldSummary?.default_risk_level || "Not available";
+
   const isRejected =
     customer?.verification_status === "REJECTED" ||
     verificationRequest?.status === "REJECTED";
@@ -557,7 +647,7 @@ export default function AgentCustomerDetailsPage() {
 
         {loading && (
           <div className="flex min-h-[55vh] flex-col items-center justify-center rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-            <Loader2 size={36} className="mb-4 animate-spin text-blue-700" />
+            <Loader2 size={36} className="mb-4 animate-spin text-emerald-700" />
             <h2 className="text-lg font-black text-slate-900">
               Loading customer details...
             </h2>
@@ -593,7 +683,7 @@ export default function AgentCustomerDetailsPage() {
 
         {!loading && customer && relationship && (
           <div className="space-y-5">
-            <section className="rounded-3xl bg-gradient-to-br from-blue-700 via-blue-600 to-indigo-700 p-5 text-white shadow-lg md:p-8">
+            <section className="rounded-3xl bg-gradient-to-br from-emerald-800 via-emerald-700 to-teal-700 p-5 text-white shadow-lg md:p-8">
               <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
                 <div>
                   <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 text-xs font-bold">
@@ -634,33 +724,58 @@ export default function AgentCustomerDetailsPage() {
                     </span>
                   </div>
 
-                  <p className="mt-4 max-w-3xl text-sm leading-6 text-blue-50">
+                  <p className="mt-4 max-w-3xl text-sm leading-6 text-emerald-50">
                     This page shows one selected customer only. Use the uploaded
-                    ID documents and selfie for verification review.
+                    ID documents, selfie, and Trust Shield profile to understand
+                    the customer’s verification and reliability status.
                   </p>
                 </div>
 
-                <div className="grid gap-3 rounded-3xl bg-white/10 p-4 backdrop-blur md:min-w-72">
+                <div
+                  className={`grid gap-3 rounded-3xl border p-4 shadow-lg md:min-w-72 ${trustScorePanelClass(
+                    Number(currentTrustScore || 0)
+                  )}`}
+                >
                   <div>
-                    <p className="text-xs font-bold uppercase text-blue-100">
-                      Trust Score
+                    <p className="text-xs font-black uppercase tracking-wide opacity-80">
+                      Current Trust Score
                     </p>
-                    <p className="text-2xl font-black">
-                      {customer.trust_score}
+
+                    <div className="mt-1 flex items-end gap-1">
+                      <p className="text-4xl font-black leading-none">
+                        {trustShieldLoading ? "..." : currentTrustScore}
+                      </p>
+                      <span className="pb-1 text-sm font-black">%</span>
+                    </div>
+
+                    <p className="mt-2 text-xs font-black">
+                      {trustShieldLoading ? "Loading Trust Shield..." : currentTrustLevel}
+                    </p>
+
+                    <p className="mt-1 text-xs font-semibold opacity-80">
+                      Risk: {prettyLabel(currentDefaultRisk)}
                     </p>
                   </div>
 
+                  <div className="h-px bg-black/10" />
+
                   <div>
-                    <p className="text-xs font-bold uppercase text-blue-100">
+                    <p className="text-xs font-black uppercase tracking-wide opacity-80">
                       Registered On
                     </p>
-                    <p className="text-sm font-bold">
+                    <p className="mt-1 text-sm font-bold">
                       {formatDateTime(customer.created_at)}
                     </p>
                   </div>
                 </div>
               </div>
             </section>
+
+            <TrustShieldCard
+              userId={customer.id}
+              title="Customer Trust Shield"
+              subtitle="This customer’s TrustPoint reliability profile based on verification, agreement, contribution history, payout behavior, and default risk."
+            />
 
             {isRejected && (
               <section className="rounded-3xl border border-red-200 bg-red-50 p-5 shadow-sm md:p-6">
@@ -759,7 +874,7 @@ export default function AgentCustomerDetailsPage() {
 
             <Section
               title="Personal Information"
-              icon={<User size={20} className="text-blue-600" />}
+              icon={<User size={20} className="text-emerald-600" />}
             >
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                 <InfoItem
@@ -797,7 +912,7 @@ export default function AgentCustomerDetailsPage() {
 
             <Section
               title="Verification Information"
-              icon={<ShieldCheck size={20} className="text-blue-600" />}
+              icon={<ShieldCheck size={20} className="text-emerald-600" />}
             >
               <div className="mb-5 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                 <InfoItem
@@ -870,7 +985,7 @@ export default function AgentCustomerDetailsPage() {
 
             <Section
               title="Location Details"
-              icon={<MapPin size={20} className="text-blue-600" />}
+              icon={<MapPin size={20} className="text-emerald-600" />}
             >
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                 <InfoItem label="Country" value={customer.country} />
@@ -882,7 +997,7 @@ export default function AgentCustomerDetailsPage() {
 
             <Section
               title="Work / Business Details"
-              icon={<BriefcaseBusiness size={20} className="text-blue-600" />}
+              icon={<BriefcaseBusiness size={20} className="text-emerald-600" />}
             >
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                 <InfoItem label="Occupation" value={customer.occupation} />
@@ -899,7 +1014,7 @@ export default function AgentCustomerDetailsPage() {
 
             <Section
               title="Payment Details"
-              icon={<Banknote size={20} className="text-blue-600" />}
+              icon={<Banknote size={20} className="text-emerald-600" />}
             >
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                 <InfoItem label="MoMo Number" value={customer.momo_number} />
@@ -917,7 +1032,7 @@ export default function AgentCustomerDetailsPage() {
 
             <Section
               title="Emergency Contact"
-              icon={<Phone size={20} className="text-blue-600" />}
+              icon={<Phone size={20} className="text-emerald-600" />}
             >
               <div className="grid gap-4 md:grid-cols-2">
                 <InfoItem
@@ -934,7 +1049,7 @@ export default function AgentCustomerDetailsPage() {
 
             <Section
               title="Agent Notes"
-              icon={<FileText size={20} className="text-blue-600" />}
+              icon={<FileText size={20} className="text-emerald-600" />}
             >
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <p className="whitespace-pre-wrap text-sm font-medium leading-6 text-slate-700">
@@ -1044,7 +1159,7 @@ export default function AgentCustomerDetailsPage() {
                   onChange={(event) => setResubmissionNote(event.target.value)}
                   rows={5}
                   placeholder="Example: I have uploaded a clearer front Ghana Card image."
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                 />
               </div>
 
@@ -1060,7 +1175,7 @@ export default function AgentCustomerDetailsPage() {
                 <button
                   type="submit"
                   disabled={resubmitLoading}
-                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-blue-700 px-5 text-sm font-bold text-white transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {resubmitLoading ? (
                     <Loader2 size={18} className="animate-spin" />
