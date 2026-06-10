@@ -4,6 +4,18 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import type { ElementType, ReactNode } from 'react';
+import NotificationBellLink from '@/components/notifications/NotificationBellLink';
+
+import { useAuth } from '@/contexts/AuthContext';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+
 import {
   BadgeCheck,
   Banknote,
@@ -13,9 +25,7 @@ import {
   ClipboardCheck,
   CreditCard,
   HandCoins,
-  Home,
   LayoutDashboard,
-  LifeBuoy,
   Loader2,
   LogOut,
   Menu,
@@ -26,13 +36,10 @@ import {
   UserCog,
   UserPlus,
   Users,
+  Wallet,
   WalletCards,
   X,
 } from 'lucide-react';
-
-import { useAuth } from '@/contexts/AuthContext';
-
-type AppRole = 'USER' | 'AGENT' | 'ADMIN' | 'SUPER_ADMIN';
 
 type NavItem = {
   href: string;
@@ -46,332 +53,21 @@ type NavSection = {
   items: NavItem[];
 };
 
-type ProfileLike = {
-  full_name?: string | null;
-  email?: string | null;
-  phone?: string | null;
-  role?: string | null;
-  verification_status?: string | null;
-  status?: string | null;
-};
-
-function normalizeRole(role: string | null | undefined): AppRole {
-  const value = String(role || 'USER').toUpperCase();
-
-  if (value === 'SUPER_ADMIN') return 'SUPER_ADMIN';
-  if (value === 'ADMIN') return 'ADMIN';
-  if (value === 'AGENT') return 'AGENT';
-
-  return 'USER';
-}
-
-function formatRole(role: AppRole) {
-  if (role === 'SUPER_ADMIN') return 'Super Admin';
-  if (role === 'ADMIN') return 'Admin';
-  if (role === 'AGENT') return 'Agent';
-
-  return 'Member';
-}
-
-function formatLabel(value: string | null | undefined) {
-  if (!value) return 'Not set';
-
-  return value
-    .replaceAll('_', ' ')
-    .toLowerCase()
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function getRoleBadgeClass(role: AppRole) {
-  if (role === 'SUPER_ADMIN') {
-    return 'border-amber-200 bg-amber-50 text-amber-800';
-  }
-
-  if (role === 'ADMIN') {
-    return 'border-emerald-200 bg-emerald-50 text-emerald-800';
-  }
-
-  if (role === 'AGENT') {
-    return 'border-blue-200 bg-blue-50 text-blue-800';
-  }
-
-  return 'border-slate-200 bg-slate-50 text-slate-700';
-}
-
-function getVerificationBadgeClass(status: string | null | undefined) {
-  const value = String(status || '').toUpperCase();
-
-  if (value === 'VERIFIED') {
-    return 'border-emerald-200 bg-emerald-50 text-emerald-800';
-  }
-
-  if (value === 'PENDING') {
-    return 'border-amber-200 bg-amber-50 text-amber-800';
-  }
-
-  if (value === 'REJECTED' || value === 'SUSPENDED') {
-    return 'border-red-200 bg-red-50 text-red-800';
-  }
-
-  return 'border-slate-200 bg-slate-50 text-slate-700';
-}
-
-function isActivePath(pathname: string, href: string) {
-  if (href === '/') {
-    return pathname === '/';
-  }
-
-  if (href === '/admin' || href === '/agent' || href === '/dashboard') {
-    return pathname === href;
-  }
-
-  return pathname === href || pathname.startsWith(`${href}/`);
-}
-
-function getInitials(name: string | null | undefined) {
-  const cleanName = String(name || 'TrustPoint Member').trim();
-
-  return cleanName
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((part) => part.charAt(0).toUpperCase())
-    .join('');
-}
-
-const globalNavItems: NavItem[] = [
-  {
-    href: '/',
-    label: 'Home',
-    icon: Home,
-    description: 'Public homepage',
-  },
-  {
-    href: '/support',
-    label: 'Support',
-    icon: LifeBuoy,
-    description: 'Help and contact center',
-  },
-];
-
-const adminNavSections: NavSection[] = [
-  {
-    title: 'Admin Control',
-    items: [
-      {
-        href: '/admin',
-        label: 'Admin Dashboard',
-        icon: Shield,
-        description: 'System overview',
-      },
-      {
-        href: '/admin/verifications',
-        label: 'Verifications',
-        icon: BadgeCheck,
-        description: 'Approve member verification',
-      },
-      {
-        href: '/admin/transactions',
-        label: 'Transactions',
-        icon: CreditCard,
-        description: 'System and MoMo records',
-      },
-      {
-        href: '/admin/notifications',
-        label: 'Admin Notifications',
-        icon: Bell,
-        description: 'System alerts and MoMo alerts',
-      },
-    ],
-  },
-  {
-    title: 'Fund Space',
-    items: [
-      {
-        href: '/admin/fund-space',
-        label: 'Fund Space Management',
-        icon: WalletCards,
-        description: 'Manage contribution groups',
-      },
-      {
-        href: '/admin/fund-space/contributions',
-        label: 'Weekly Contributions',
-        icon: HandCoins,
-        description: 'Track member contributions',
-      },
-      {
-        href: '/admin/manual-payment-submissions',
-        label: 'MoMo Reviews',
-        icon: Smartphone,
-        description: 'Review MoMo payment records',
-      },
-      {
-        href: '/admin/fund-space/payouts',
-        label: 'Payout Approvals',
-        icon: Banknote,
-        description: 'Approve and mark payouts paid',
-      },
-      {
-        href: '/admin/fund-space/disputes',
-        label: 'Complaints',
-        icon: CircleHelp,
-        description: 'Review member and agent issues',
-      },
-    ],
-  },
-  {
-    title: 'People & System',
-    items: [
-      {
-        href: '/admin/users',
-        label: 'Members',
-        icon: User,
-        description: 'Manage member accounts',
-      },
-      {
-        href: '/admin/agents',
-        label: 'Agents',
-        icon: Users,
-        description: 'Manage field agents',
-      },
-      {
-        href: '/admin/settings/auth',
-        label: 'Audit Settings',
-        icon: Settings,
-        description: 'Security and auth controls',
-      },
-      {
-        href: '/admin/audit-logs',
-        label: 'Audit Logs',
-        icon: ClipboardCheck,
-        description: 'System activity history',
-      },
-    ],
-  },
-];
-
-const agentNavSections: NavSection[] = [
-  {
-    title: 'Agent Control',
-    items: [
-      {
-        href: '/agent',
-        label: 'Agent Dashboard',
-        icon: UserCog,
-        description: 'Agent overview',
-      },
-      {
-        href: '/agent/customers',
-        label: 'Customers',
-        icon: Users,
-        description: 'Registered customers',
-      },
-      {
-        href: '/agent/register-customer',
-        label: 'Register Customer',
-        icon: UserPlus,
-        description: 'Create customer account',
-      },
-      {
-        href: '/agent/notifications',
-        label: 'Agent Notifications',
-        icon: Bell,
-        description: 'Agent alerts',
-      },
-    ],
-  },
-  {
-    title: 'Fund Space',
-    items: [
-      {
-        href: '/agent/fund-space',
-        label: 'Customer Fund Space',
-        icon: WalletCards,
-        description: 'Manage customer groups',
-      },
-      {
-        href: '/agent/fund-space/contributions',
-        label: 'Weekly Contributions',
-        icon: HandCoins,
-        description: 'Help customers pay weekly',
-      },
-      {
-        href: '/agent/fund-space/disputes',
-        label: 'Complaints',
-        icon: CircleHelp,
-        description: 'Report customer payment issues',
-      },
-    ],
-  },
-];
-
-const memberNavSections: NavSection[] = [
-  {
-    title: 'My Account',
-    items: [
-      {
-        href: '/dashboard',
-        label: 'My Dashboard',
-        icon: LayoutDashboard,
-        description: 'Account overview',
-      },
-      {
-        href: '/dashboard/verification',
-        label: 'Verification',
-        icon: BadgeCheck,
-        description: 'Submit or review verification',
-      },
-      {
-        href: '/dashboard/fund-space/disputes',
-        label: 'Disputes & Complaints',
-        icon: CircleHelp,
-        description: 'Report Fund Space issues',
-      },
-    ],
-  },
-];
-
 export function DashboardLayout({ children }: { children: ReactNode }) {
-  const { profile, signOut, loading } = useAuth();
+  const { profile, signOut } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
-  const profileRecord = profile as ProfileLike | null;
-  const role = normalizeRole(profileRecord?.role);
-  const isAdmin = role === 'ADMIN' || role === 'SUPER_ADMIN';
+  const role = profile?.role || 'USER';
+  const isAdmin = role === 'SUPER_ADMIN' || role === 'ADMIN';
   const isAgent = role === 'AGENT';
-
-  const navSections = useMemo(() => {
-    if (isAdmin) return adminNavSections;
-    if (isAgent) return agentNavSections;
-
-    return memberNavSections;
-  }, [isAdmin, isAgent]);
-
-  const dashboardHref = useMemo(() => {
-    if (isAdmin) return '/admin';
-    if (isAgent) return '/agent';
-
-    return '/dashboard';
-  }, [isAdmin, isAgent]);
-
-  const displayName = profileRecord?.full_name || 'TrustPoint Member';
-  const displayEmail = profileRecord?.email || profileRecord?.phone || '';
-  const verificationStatus = profileRecord?.verification_status || 'UNVERIFIED';
-
-  const closeMenus = () => {
-    setMobileMenuOpen(false);
-    setProfileMenuOpen(false);
-  };
 
   const handleSignOut = async () => {
     try {
       setLoggingOut(true);
-      setProfileMenuOpen(false);
-      setMobileMenuOpen(false);
 
       await signOut();
 
@@ -386,362 +82,721 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
-        <div className="w-full max-w-sm rounded-[2rem] border border-slate-200 bg-white p-8 text-center shadow-sm">
-          <Loader2 className="mx-auto mb-4 h-10 w-10 animate-spin text-emerald-700" />
-          <p className="text-sm font-bold text-slate-700">
-            Loading TrustPoint Fund Space...
-          </p>
-          <p className="mt-2 text-xs leading-5 text-slate-500">
-            Preparing your secure dashboard.
-          </p>
+  const adminNavItems: NavItem[] = [
+    {
+      href: '/admin',
+      label: 'Admin Dashboard',
+      icon: Shield,
+      description: 'System overview',
+    },
+    {
+      href: '/admin/verifications',
+      label: 'Verifications',
+      icon: BadgeCheck,
+      description: 'Approve member verification',
+    },
+    {
+      href: '/admin/transactions',
+      label: 'System Transactions',
+      icon: BadgeCheck,
+      description: 'Approve member verification',
+    },
+    {
+      href: '/admin/fund-space',
+      label: 'Fund Space Management',
+      icon: WalletCards,
+      description: 'Manage contribution groups',
+    },
+    {
+      href: '/admin/fund-space/contributions',
+      label: 'Weekly Contributions',
+      icon: HandCoins,
+      description: 'Track member contributions',
+    },
+    {
+      href: '/admin/manual-payment-submissions',
+      label: 'MoMo Verification',
+      icon: Smartphone,
+      description: 'Approve MoMo payment references',
+    },
+    {
+      href: '/admin/fund-space/payouts',
+      label: 'Payout Approvals',
+      icon: Banknote,
+      description: 'Approve and record payouts',
+    },
+    {
+  href: '/admin/fund-space/disputes',
+  label: 'Fund Space Complaints',
+  icon: CircleHelp,
+  description: 'Review member and agent complaints',
+},
+    {
+      href: '/admin/users',
+      label: 'Members',
+      icon: User,
+      description: 'Manage member accounts',
+    },
+    {
+      href: '/admin/agents',
+      label: 'Agents',
+      icon: Users,
+      description: 'Manage field agents',
+    },
+    {
+      href: '/admin/notifications',
+      label: 'Admin Notifications',
+      icon: Bell,
+      description: 'System alerts',
+    },
+  ];
+
+  const adminSystemItems: NavItem[] = [
+    {
+      href: '/admin/settings/auth',
+      label: 'Audit Settings',
+      icon: Settings,
+      description: 'Security and auth controls',
+    },
+    {
+      href: '/admin/audit-logs',
+      label: 'Audit Logs',
+      icon: ClipboardCheck,
+      description: 'System activity history',
+    },
+    
+  ];
+
+  const agentNavItems: NavItem[] = [
+    {
+      href: '/agent',
+      label: 'Agent Dashboard',
+      icon: UserCog,
+      description: 'Agent overview',
+    },
+    {
+      href: '/agent/fund-space',
+      label: 'Customer Fund Space',
+      icon: WalletCards,
+      description: 'Manage customer groups',
+    },
+    {
+      href: '/agent/fund-space/contributions',
+      label: 'Weekly Contributions',
+      icon: HandCoins,
+      description: 'Help customers pay weekly',
+    },
+    {
+  href: '/agent/fund-space/disputes',
+  label: 'Complaints',
+  icon: CircleHelp,
+  description: 'Report Fund Space issues',
+},
+    {
+      href: '/agent/customers',
+      label: 'Customers',
+      icon: Users,
+      description: 'Registered customers',
+    },
+    {
+      href: '/agent/register-customer',
+      label: 'Register Customer',
+      icon: UserPlus,
+      description: 'Create customer account',
+    },
+    {
+      href: '/agent/notifications',
+      label: 'Agent Notifications',
+      icon: Bell,
+      description: 'Agent alerts',
+    },
+  ];
+
+  const memberNavItems: NavItem[] = [
+    {
+      href: '/dashboard',
+      label: 'My Dashboard',
+      icon: LayoutDashboard,
+      description: 'Personal overview',
+    },
+    {
+      href: '/dashboard/fund-space',
+      label: 'My Fund Space',
+      icon: Users,
+      description: 'Groups and weekly payments',
+    },
+    {
+  href: '/dashboard/fund-space/disputes',
+  label: 'Complaints',
+  icon: CircleHelp,
+  description: 'Report payment or payout issues',
+},
+    {
+      href: '/dashboard/transactions',
+      label: 'Payment Records',
+      icon: CreditCard,
+      description: 'Contribution payment history',
+    },
+    {
+      href: '/dashboard/notifications',
+      label: 'Notifications',
+      icon: Bell,
+      description: 'Contribution alerts',
+    },
+  ];
+
+  const memberViewItems: NavItem[] = [
+    {
+      href: '/dashboard',
+      label: 'My Dashboard',
+      icon: LayoutDashboard,
+      description: 'Personal overview',
+    },
+    {
+      href: '/dashboard/fund-space',
+      label: 'My Fund Space',
+      icon: Users,
+      description: 'Groups and weekly payments',
+    },
+    {
+      href: '/dashboard/transactions',
+      label: 'Payment Records',
+      icon: CreditCard,
+      description: 'Contribution payment history',
+    },
+    {
+      href: '/dashboard/notifications',
+      label: 'Notifications',
+      icon: Bell,
+      description: 'Contribution alerts',
+    },
+  ];
+
+  const navSections = useMemo<NavSection[]>(() => {
+    if (isAdmin) {
+      return [
+        {
+          title: 'Admin Workspace',
+          items: adminNavItems,
+        },
+        {
+          title: 'Member View',
+          items: memberViewItems,
+        },
+        {
+          title: 'System Controls',
+          items: adminSystemItems,
+        },
+      ];
+    }
+
+    if (isAgent) {
+      return [
+        {
+          title: 'Agent Workspace',
+          items: agentNavItems,
+        },
+        {
+          title: 'Member View',
+          items: memberViewItems,
+        },
+      ];
+    }
+
+    return [
+      {
+        title: 'Member Menu',
+        items: memberNavItems,
+      },
+    ];
+  }, [isAdmin, isAgent]);
+
+  const getInitials = (name?: string | null) => {
+    if (!name) return 'TP';
+
+    const parts = name.trim().split(' ').filter(Boolean);
+
+    if (parts.length === 1) {
+      return parts[0].slice(0, 2).toUpperCase();
+    }
+
+    return `${parts[0]?.[0] ?? ''}${parts[1]?.[0] ?? ''}`.toUpperCase();
+  };
+
+  const getRoleLabel = (value?: string | null) => {
+    if (value === 'SUPER_ADMIN') return 'Super Admin';
+    if (value === 'ADMIN') return 'Admin';
+    if (value === 'AGENT') return 'Agent';
+    return 'Member';
+  };
+
+  const getRoleBadgeClasses = (value?: string | null) => {
+    if (value === 'SUPER_ADMIN') {
+      return 'border-purple-200 bg-purple-50 text-purple-700';
+    }
+
+    if (value === 'ADMIN') {
+      return 'border-indigo-200 bg-indigo-50 text-indigo-700';
+    }
+
+    if (value === 'AGENT') {
+      return 'border-amber-200 bg-amber-50 text-amber-700';
+    }
+
+    return 'border-blue-200 bg-blue-50 text-blue-700';
+  };
+
+  const getHomeHref = () => {
+    if (isAdmin) return '/admin';
+    if (isAgent) return '/agent';
+    return '/dashboard';
+  };
+
+  const getNotificationsHref = () => {
+    if (isAdmin) return '/admin/notifications';
+    if (isAgent) return '/agent/notifications';
+    return '/dashboard/notifications';
+  };
+
+  const getDashboardTitle = () => {
+    if (pathname.startsWith('/admin/manual-payment-submissions')) {
+      return 'MoMo Payment Verification';
+    }
+
+    if (pathname.startsWith('/admin/fund-space/contributions')) {
+      return 'Weekly Contributions';
+    }
+
+    if (pathname.startsWith('/admin/fund-space/payouts')) {
+      return 'Payout Approvals';
+    }
+
+    if (pathname.startsWith('/admin/fund-space')) {
+      return 'Fund Space Management';
+    }
+
+    if (pathname.startsWith('/admin/verifications')) return 'Verifications';
+    if (pathname.startsWith('/admin/users')) return 'Members';
+    if (pathname.startsWith('/admin/agents')) return 'Agents';
+    if (pathname.startsWith('/admin/notifications')) return 'Admin Notifications';
+    if (pathname.startsWith('/admin/settings/auth')) return 'Audit Settings';
+    if (pathname.startsWith('/admin/audit-logs')) return 'Audit Logs';
+    if (pathname.startsWith('/admin')) return 'Admin Dashboard';
+
+    if (pathname.startsWith('/agent/fund-space/contributions')) {
+      return 'Weekly Contributions';
+    }
+
+    if (pathname.startsWith('/agent/fund-space')) {
+      return 'Customer Fund Space';
+    }
+
+    if (pathname.startsWith('/agent/customers')) return 'Customers';
+    if (pathname.startsWith('/agent/register-customer')) return 'Register Customer';
+    if (pathname.startsWith('/agent/notifications')) return 'Agent Notifications';
+    if (pathname.startsWith('/agent')) return 'Agent Dashboard';
+
+    if (pathname.startsWith('/dashboard/fund-space')) return 'My Fund Space';
+    if (pathname.startsWith('/dashboard/transactions')) return 'Payment Records';
+    if (pathname.startsWith('/dashboard/profile')) return 'Profile Settings';
+    if (pathname.startsWith('/dashboard/notifications')) return 'My Notifications';
+    if (pathname.startsWith('/dashboard')) return 'My Dashboard';
+
+    return 'Dashboard';
+  };
+
+  const isNavActive = (href: string) => {
+    if (href === '/dashboard' || href === '/admin' || href === '/agent') {
+      return pathname === href;
+    }
+
+    if (href === '/admin/fund-space') {
+      return (
+        pathname === '/admin/fund-space' ||
+        (pathname.startsWith('/admin/fund-space/') &&
+          !pathname.startsWith('/admin/fund-space/contributions') &&
+          !pathname.startsWith('/admin/fund-space/payouts'))
+      );
+    }
+
+    if (href === '/agent/fund-space') {
+      return (
+        pathname === '/agent/fund-space' ||
+        (pathname.startsWith('/agent/fund-space/') &&
+          !pathname.startsWith('/agent/fund-space/contributions'))
+      );
+    }
+
+    return pathname === href || pathname.startsWith(`${href}/`);
+  };
+
+  const renderNavSections = (sections: NavSection[], isMobile = false) => {
+    return sections.map((section) => (
+      <div key={section.title} className="space-y-2">
+        <p className="px-3 pt-3 text-[11px] font-black uppercase tracking-[0.18em] text-slate-400">
+          {section.title}
+        </p>
+
+        <div className="space-y-1">
+          {section.items.map((item) => {
+            const Icon = item.icon;
+            const isActive = isNavActive(item.href);
+
+            return (
+              <Link
+                key={`${section.title}-${item.href}`}
+                href={item.href}
+                onClick={() => {
+                  if (isMobile) setMobileMenuOpen(false);
+                }}
+                className={`group flex items-center gap-3 rounded-2xl px-3 py-3 text-sm transition ${
+                  isActive
+                    ? 'bg-emerald-50 font-bold text-emerald-700'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
+                }`}
+              >
+                <div
+                  className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl ${
+                    isActive
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-slate-100 text-slate-500 group-hover:bg-white'
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <span className="block truncate">{item.label}</span>
+                  {item.description && (
+                    <span
+                      className={`mt-0.5 block truncate text-[11px] font-medium ${
+                        isActive ? 'text-emerald-600' : 'text-slate-400'
+                      }`}
+                    >
+                      {item.description}
+                    </span>
+                  )}
+                </div>
+              </Link>
+            );
+          })}
         </div>
       </div>
-    );
-  }
+    ));
+  };
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      {mobileMenuOpen && (
-        <button
-          type="button"
-          aria-label="Close navigation overlay"
-          onClick={() => setMobileMenuOpen(false)}
-          className="fixed inset-0 z-40 bg-slate-950/50 backdrop-blur-sm lg:hidden"
-        />
-      )}
-
-      <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-[88vw] max-w-[340px] flex-col border-r border-emerald-950/10 bg-white shadow-2xl transition-transform duration-300 lg:w-80 lg:translate-x-0 ${
-          mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
-      >
-        <div className="flex min-h-20 items-center justify-between border-b border-slate-100 px-5">
-          <Link
-            href={dashboardHref}
-            onClick={closeMenus}
-            className="flex min-w-0 items-center gap-3"
-          >
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-950 to-emerald-700 text-sm font-black text-white shadow-sm">
-              TP
-            </div>
-
-            <div className="min-w-0">
-              <p className="truncate text-sm font-black uppercase tracking-[0.18em] text-emerald-900">
-                TrustPoint
-              </p>
-              <p className="truncate text-xs font-semibold text-slate-500">
-                Fund Space
-              </p>
-            </div>
-          </Link>
-
-          <button
-            type="button"
-            onClick={() => setMobileMenuOpen(false)}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 text-slate-600 hover:bg-slate-50 lg:hidden"
-            aria-label="Close menu"
-          >
-            <X size={20} />
-          </button>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
-          <div className="mb-5 rounded-[1.5rem] border border-emerald-100 bg-emerald-50 p-4">
-            <div className="flex gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-emerald-900 text-sm font-black text-white">
-                {getInitials(displayName)}
+    <div className="h-screen overflow-hidden bg-slate-50">
+      <div className="flex h-full overflow-hidden">
+        <aside className="hidden h-full w-72 flex-shrink-0 border-r border-slate-200 bg-white lg:flex lg:flex-col">
+          <div className="flex h-20 flex-shrink-0 items-center border-b border-slate-100 px-5">
+            <Link href={getHomeHref()} className="flex min-w-0 items-center gap-3">
+              <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white shadow-sm">
+                <Wallet className="h-6 w-6" />
               </div>
 
               <div className="min-w-0">
-                <p className="truncate text-sm font-black text-slate-950">
-                  {displayName}
+                <p className="truncate text-lg font-black leading-none text-slate-950">
+                  TrustPoint
                 </p>
-
-                {displayEmail && (
-                  <p className="mt-1 truncate text-xs font-semibold text-slate-500">
-                    {displayEmail}
-                  </p>
-                )}
-
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <span
-                    className={`rounded-full border px-2.5 py-1 text-[11px] font-black ${getRoleBadgeClass(
-                      role
-                    )}`}
-                  >
-                    {formatRole(role)}
-                  </span>
-
-                  <span
-                    className={`rounded-full border px-2.5 py-1 text-[11px] font-black ${getVerificationBadgeClass(
-                      verificationStatus
-                    )}`}
-                  >
-                    {formatLabel(verificationStatus)}
-                  </span>
-                </div>
+                <p className="mt-1 truncate text-xs font-bold text-emerald-600">
+                  Fund Space
+                </p>
               </div>
-            </div>
+            </Link>
           </div>
 
-          <nav className="space-y-6">
-            {navSections.map((section) => (
-              <div key={section.title}>
-                <p className="px-3 text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">
-                  {section.title}
-                </p>
+          <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
+            <nav className="space-y-5">{renderNavSections(navSections)}</nav>
+          </div>
 
-                <div className="mt-2 space-y-1">
-                  {section.items.map((item) => (
-                    <SidebarLink
-                      key={item.href}
-                      item={item}
-                      active={isActivePath(pathname, item.href)}
-                      onClick={closeMenus}
-                    />
-                  ))}
+          <div className="flex-shrink-0 border-t border-slate-100 p-3">
+            <Link
+              href="/support"
+              className="flex items-center gap-3 rounded-2xl bg-slate-50 px-3 py-3 text-sm font-semibold text-slate-600 transition hover:bg-emerald-50 hover:text-emerald-700"
+            >
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-emerald-600">
+                <CircleHelp className="h-4 w-4" />
+              </div>
+
+              <div>
+                <p>Support</p>
+                <p className="text-[11px] font-medium text-slate-400">
+                  Get help
+                </p>
+              </div>
+            </Link>
+          </div>
+        </aside>
+
+        {mobileMenuOpen && (
+          <div className="fixed inset-0 z-50 lg:hidden">
+            <button
+              type="button"
+              aria-label="Close menu overlay"
+              className="absolute inset-0 bg-slate-950/40"
+              onClick={() => setMobileMenuOpen(false)}
+            />
+
+            <aside className="relative flex h-full w-[88vw] max-w-sm flex-col bg-white shadow-2xl">
+              <div className="flex h-20 flex-shrink-0 items-center justify-between border-b border-slate-100 px-4">
+                <Link
+                  href={getHomeHref()}
+                  className="flex min-w-0 items-center gap-3"
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white shadow-sm">
+                    <Wallet className="h-6 w-6" />
+                  </div>
+
+                  <div className="min-w-0">
+                    <p className="truncate text-lg font-black leading-none text-slate-950">
+                      TrustPoint
+                    </p>
+                    <p className="mt-1 truncate text-xs font-bold text-emerald-600">
+                      Fund Space
+                    </p>
+                  </div>
+                </Link>
+
+                <button
+                  type="button"
+                  className="rounded-xl p-2 text-slate-700 hover:bg-slate-100"
+                  onClick={() => setMobileMenuOpen(false)}
+                  aria-label="Close menu"
+                >
+                  <X className="h-6 w-6" />
+                </button>
+              </div>
+
+              <div className="border-b border-slate-100 px-4 py-4">
+                <div className="rounded-2xl bg-slate-50 p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full bg-emerald-600 text-sm font-black text-white">
+                      {getInitials(profile?.full_name)}
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-bold text-slate-900">
+                        {profile?.full_name || 'TrustPoint User'}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {getRoleLabel(profile?.role)}
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </div>
-            ))}
 
-            <div>
-              <p className="px-3 text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">
-                General
-              </p>
-
-              <div className="mt-2 space-y-1">
-                {globalNavItems.map((item) => (
-                  <SidebarLink
-                    key={item.href}
-                    item={item}
-                    active={isActivePath(pathname, item.href)}
-                    onClick={closeMenus}
-                  />
-                ))}
+              <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
+                <nav className="space-y-5">
+                  {renderNavSections(navSections, true)}
+                </nav>
               </div>
-            </div>
-          </nav>
-        </div>
 
-        <div className="border-t border-slate-100 p-4">
-          <button
-            type="button"
-            onClick={handleSignOut}
-            disabled={loggingOut}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-black text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {loggingOut ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <LogOut size={17} />
-            )}
-            {loggingOut ? 'Signing out...' : 'Sign Out'}
-          </button>
-        </div>
-      </aside>
+              <div className="flex-shrink-0 border-t border-slate-100 p-3">
+                <Link
+                  href="/support"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex items-center gap-3 rounded-2xl bg-slate-50 px-3 py-3 text-sm font-semibold text-slate-600"
+                >
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-emerald-600">
+                    <CircleHelp className="h-4 w-4" />
+                  </div>
+                  Support
+                </Link>
+              </div>
+            </aside>
+          </div>
+        )}
 
-      <div className="lg:pl-80">
-        <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur-xl">
-          <div className="flex min-h-20 items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
-            <div className="flex min-w-0 items-center gap-3">
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <header className="flex h-16 flex-shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 sm:h-20 sm:px-6 lg:px-8">
+            <div className="flex min-w-0 items-center gap-3 sm:gap-4">
               <button
                 type="button"
+                className="rounded-xl p-2 text-slate-700 transition hover:bg-slate-100 lg:hidden"
                 onClick={() => setMobileMenuOpen(true)}
-                className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-slate-200 text-slate-700 hover:bg-slate-50 lg:hidden"
                 aria-label="Open menu"
               >
-                <Menu size={22} />
+                <Menu className="h-6 w-6" />
               </button>
 
               <div className="min-w-0">
-                <p className="truncate text-sm font-black text-slate-950 sm:text-base">
-                  {getCurrentPageTitle(pathname, navSections)}
+                <p className="hidden text-xs font-bold uppercase tracking-wide text-emerald-600 sm:block">
+                  TrustPoint Fund Space
                 </p>
-                <p className="truncate text-xs font-semibold text-slate-500">
-                  {formatRole(role)} workspace
-                </p>
+                <h1 className="truncate text-lg font-black text-slate-950 sm:mt-1 sm:text-2xl">
+                  {getDashboardTitle()}
+                </h1>
               </div>
             </div>
 
-            <div className="flex shrink-0 items-center gap-2">
-              <Link
-                href="/support"
-                className="hidden min-h-11 items-center justify-center gap-2 rounded-2xl border border-slate-200 px-4 py-2 text-sm font-black text-slate-700 hover:bg-slate-50 sm:inline-flex"
-              >
-                <LifeBuoy size={17} />
-                Support
-              </Link>
+            <div className="hidden flex-1 items-center justify-center px-8 xl:flex">
+              <div className="flex w-full max-w-md items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-500">
+                <SearchPlaceholder />
+              </div>
+            </div>
 
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setProfileMenuOpen((value) => !value)}
-                  className="flex min-h-11 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-2.5 py-2 text-sm font-black text-slate-800 hover:bg-slate-50 sm:px-3"
-                  aria-expanded={profileMenuOpen}
-                  aria-haspopup="menu"
-                >
-                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-900 text-xs font-black text-white">
-                    {getInitials(displayName)}
-                  </span>
+            <div className="flex items-center gap-2 sm:gap-3">
+              <NotificationBellLink
+                href={getNotificationsHref()}
+                label="Notifications"
+                showText={false}
+                className="flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50 sm:h-11 sm:w-11"
+                iconClassName="h-5 w-5"
+              />
 
-                  <span className="hidden max-w-36 truncate sm:block">
-                    {displayName}
-                  </span>
-
-                  <ChevronDown size={16} />
-                </button>
-
-                {profileMenuOpen && (
-                  <div
-                    role="menu"
-                    className="absolute right-0 mt-2 w-72 overflow-hidden rounded-[1.5rem] border border-slate-200 bg-white shadow-xl"
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    className="h-auto rounded-2xl border border-slate-200 bg-white px-2 py-2 shadow-sm transition hover:bg-slate-50 sm:px-3"
                   >
-                    <div className="border-b border-slate-100 p-4">
-                      <p className="truncate text-sm font-black text-slate-950">
-                        {displayName}
-                      </p>
+                    <div className="flex items-center gap-2 sm:gap-3">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-600 text-sm font-bold text-white sm:h-10 sm:w-10">
+                        {getInitials(profile?.full_name)}
+                      </div>
 
-                      {displayEmail && (
-                        <p className="mt-1 truncate text-xs font-semibold text-slate-500">
-                          {displayEmail}
+                      <div className="hidden text-left md:block">
+                        <p className="max-w-[150px] truncate text-sm font-semibold text-slate-900">
+                          {profile?.full_name || 'TrustPoint User'}
                         </p>
-                      )}
+                        <p className="text-xs text-slate-500">
+                          {getRoleLabel(profile?.role)}
+                        </p>
+                      </div>
 
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <span
-                          className={`rounded-full border px-2.5 py-1 text-[11px] font-black ${getRoleBadgeClass(
-                            role
-                          )}`}
-                        >
-                          {formatRole(role)}
-                        </span>
+                      <ChevronDown className="hidden h-4 w-4 text-slate-500 md:block" />
+                    </div>
+                  </Button>
+                </DropdownMenuTrigger>
 
-                        <span
-                          className={`rounded-full border px-2.5 py-1 text-[11px] font-black ${getVerificationBadgeClass(
-                            verificationStatus
-                          )}`}
-                        >
-                          {formatLabel(verificationStatus)}
-                        </span>
+                <DropdownMenuContent
+                  align="end"
+                  sideOffset={10}
+                  className="w-80 rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl"
+                >
+                  <div className="rounded-xl bg-slate-50 p-4">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-600 text-base font-bold text-white">
+                        {getInitials(profile?.full_name)}
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-slate-900">
+                          {profile?.full_name || 'TrustPoint User'}
+                        </p>
+
+                        <p className="mt-1 truncate text-xs text-slate-500">
+                          {profile?.phone || 'No phone number'}
+                        </p>
+
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <span
+                            className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold ${getRoleBadgeClasses(
+                              profile?.role
+                            )}`}
+                          >
+                            {getRoleLabel(profile?.role)}
+                          </span>
+
+                          {profile?.verification_status === 'VERIFIED' && (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
+                              <BadgeCheck className="h-3 w-3" />
+                              Verified
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
+                  </div>
 
-                    <div className="p-2">
-                      <Link
-                        href={dashboardHref}
-                        onClick={closeMenus}
-                        className="flex items-center gap-2 rounded-2xl px-3 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50"
-                      >
-                        <LayoutDashboard size={17} />
-                        Dashboard
-                      </Link>
+                  <div className="px-2 py-2">
+                    <p className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Account
+                    </p>
 
-                      <Link
-                        href="/support"
-                        onClick={closeMenus}
-                        className="flex items-center gap-2 rounded-2xl px-3 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50"
-                      >
-                        <LifeBuoy size={17} />
-                        Support
-                      </Link>
+                    <DropdownMenuItem
+                      onClick={() => router.push('/dashboard/profile')}
+                      className="flex cursor-pointer items-center rounded-xl px-3 py-3 text-sm text-slate-700 outline-none transition hover:bg-slate-100 focus:bg-slate-100"
+                    >
+                      <div className="mr-3 flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+                        <Settings className="h-4 w-4" />
+                      </div>
 
-                      <button
-                        type="button"
-                        onClick={handleSignOut}
-                        disabled={loggingOut}
-                        className="flex w-full items-center gap-2 rounded-2xl px-3 py-3 text-left text-sm font-bold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
+                      <div>
+                        <p className="font-medium">Profile Settings</p>
+                        <p className="text-xs text-slate-500">
+                          Update your personal details
+                        </p>
+                      </div>
+                    </DropdownMenuItem>
+
+                    <DropdownMenuItem
+                      onClick={() => router.push('/support')}
+                      className="mt-1 flex cursor-pointer items-center rounded-xl px-3 py-3 text-sm text-slate-700 outline-none transition hover:bg-slate-100 focus:bg-slate-100"
+                    >
+                      <div className="mr-3 flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+                        <CircleHelp className="h-4 w-4" />
+                      </div>
+
+                      <div>
+                        <p className="font-medium">Help & Support</p>
+                        <p className="text-xs text-slate-500">
+                          Get help with weekly contributions
+                        </p>
+                      </div>
+                    </DropdownMenuItem>
+                  </div>
+
+                  <DropdownMenuSeparator className="my-2 bg-slate-200" />
+
+                  <div className="px-2 pb-2">
+                    <DropdownMenuItem
+                      onClick={handleSignOut}
+                      disabled={loggingOut}
+                      className="flex cursor-pointer items-center rounded-xl px-3 py-3 text-sm text-red-600 outline-none transition hover:bg-red-50 focus:bg-red-50 disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      <div className="mr-3 flex h-9 w-9 items-center justify-center rounded-lg bg-red-50 text-red-600">
                         {loggingOut ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
                         ) : (
-                          <LogOut size={17} />
+                          <LogOut className="h-4 w-4" />
                         )}
-                        {loggingOut ? 'Signing out...' : 'Sign Out'}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </header>
+                      </div>
 
-        <div className="min-h-[calc(100vh-5rem)]">{children}</div>
+                      <div>
+                        <p className="font-medium">
+                          {loggingOut ? 'Signing out...' : 'Sign Out'}
+                        </p>
+                        <p className="text-xs text-red-400">
+                          Securely log out of your account
+                        </p>
+                      </div>
+                    </DropdownMenuItem>
+                  </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </header>
+
+          <main className="min-h-0 flex-1 overflow-y-auto">
+            <div className="mx-auto w-full max-w-[1600px] px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
+              {children}
+            </div>
+          </main>
+        </div>
       </div>
     </div>
   );
 }
 
-function SidebarLink({
-  item,
-  active,
-  onClick,
-}: {
-  item: NavItem;
-  active: boolean;
-  onClick: () => void;
-}) {
-  const Icon = item.icon;
-
+function SearchPlaceholder() {
   return (
-    <Link
-      href={item.href}
-      onClick={onClick}
-      className={`group flex min-h-14 items-center gap-3 rounded-2xl px-3 py-3 transition ${
-        active
-          ? 'bg-emerald-900 text-white shadow-sm'
-          : 'text-slate-700 hover:bg-emerald-50 hover:text-emerald-900'
-      }`}
-    >
-      <span
-        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${
-          active
-            ? 'bg-white/15 text-white'
-            : 'bg-slate-50 text-slate-500 group-hover:bg-white group-hover:text-emerald-800'
-        }`}
-      >
-        <Icon size={19} />
-      </span>
-
-      <span className="min-w-0">
-        <span className="block truncate text-sm font-black">{item.label}</span>
-
-        {item.description && (
-          <span
-            className={`mt-0.5 block truncate text-xs font-medium ${
-              active ? 'text-emerald-50/80' : 'text-slate-400'
-            }`}
-          >
-            {item.description}
-          </span>
-        )}
-      </span>
-    </Link>
+    <span className="text-sm">
+      Search Fund Spaces, weekly contributions, members, agents, and payment
+      records...
+    </span>
   );
 }
-
-function getCurrentPageTitle(pathname: string, sections: NavSection[]) {
-  const allItems = [...sections.flatMap((section) => section.items), ...globalNavItems];
-
-  const exactMatch = allItems.find((item) => pathname === item.href);
-
-  if (exactMatch) return exactMatch.label;
-
-  const nestedMatch = allItems
-    .filter(
-      (item) =>
-        item.href !== '/' &&
-        pathname !== item.href &&
-        pathname.startsWith(`${item.href}/`)
-    )
-    .sort((a, b) => b.href.length - a.href.length)[0];
-
-  if (nestedMatch) return nestedMatch.label;
-
-  return 'TrustPoint Fund Space';
-}
-
-export default DashboardLayout;
