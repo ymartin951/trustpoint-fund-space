@@ -1,16 +1,25 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import type { FormEvent, ReactNode } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   AlertCircle,
+  ArrowLeft,
   ArrowRight,
+  BadgeCheck,
   CheckCircle2,
+  Clock,
+  HelpCircle,
+  Home,
   ImagePlus,
   Loader2,
+  LogOut,
   ShieldCheck,
+  Smartphone,
   Upload,
+  Users,
   Wallet,
 } from 'lucide-react';
 
@@ -167,23 +176,23 @@ const validVerificationRequestStatuses: VerificationRequestStatus[] = [
 
 function inputClass(error?: boolean) {
   return [
-    'w-full rounded-2xl border bg-white px-4 py-3 text-sm text-slate-900 outline-none transition',
-    'placeholder:text-slate-400 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100',
-    error ? 'border-red-300' : 'border-slate-200',
+    'min-h-12 w-full rounded-2xl border bg-slate-50 px-4 text-sm font-semibold text-slate-900 outline-none transition',
+    'placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100',
+    error ? 'border-red-300 bg-red-50' : 'border-slate-200',
   ].join(' ');
 }
 
 function labelClass() {
-  return 'mb-2 block text-sm font-semibold text-slate-700';
+  return 'mb-2 block text-sm font-black text-slate-700';
 }
 
 function sectionTitleClass() {
-  return 'flex items-center gap-2 text-lg font-extrabold text-slate-950';
+  return 'flex items-center gap-2 break-words text-xl font-black text-slate-950';
 }
 
 function fileBoxClass(hasFile: boolean, hasError?: boolean) {
   return [
-    'relative flex min-h-36 cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed p-5 text-center transition',
+    'relative flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed p-5 text-center transition',
     hasError
       ? 'border-red-300 bg-red-50'
       : hasFile
@@ -266,6 +275,15 @@ function normalizeUserCategory(value: string | null | undefined): UserCategory {
   return 'INDIVIDUAL';
 }
 
+function formatLabel(value: string | null | undefined) {
+  if (!value) return 'Not set';
+
+  return value
+    .replaceAll('_', ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 function FileUploadBox({
   label,
   description,
@@ -280,7 +298,7 @@ function FileUploadBox({
   onChange: (file: File | null) => void;
 }) {
   return (
-    <div>
+    <div className="min-w-0">
       <label className={labelClass()}>{label}</label>
 
       <label className={fileBoxClass(Boolean(file), Boolean(error))}>
@@ -296,19 +314,21 @@ function FileUploadBox({
 
         {file ? (
           <>
-            <CheckCircle2 size={28} className="mb-2 text-emerald-600" />
-            <p className="break-all text-sm font-bold text-emerald-800">
+            <CheckCircle2 className="mb-3 h-8 w-8 text-emerald-600" />
+            <p className="max-w-full break-words text-sm font-black text-emerald-800 [overflow-wrap:anywhere]">
               {file.name}
             </p>
-            <p className="mt-1 text-xs text-emerald-700">
+            <p className="mt-1 text-xs font-semibold text-emerald-700">
               Click to change image
             </p>
           </>
         ) : (
           <>
-            <ImagePlus size={28} className="mb-2 text-slate-500" />
-            <p className="text-sm font-bold text-slate-800">{description}</p>
-            <p className="mt-1 text-xs text-slate-500">
+            <ImagePlus className="mb-3 h-8 w-8 text-slate-500" />
+            <p className="break-words text-sm font-black text-slate-800">
+              {description}
+            </p>
+            <p className="mt-1 text-xs font-semibold text-slate-500">
               JPG, PNG, or WEBP. Maximum 5MB.
             </p>
           </>
@@ -316,11 +336,71 @@ function FileUploadBox({
       </label>
 
       {error && (
-        <p className="mt-2 flex items-center gap-1 text-xs font-semibold text-red-600">
-          <AlertCircle size={14} />
-          {error}
+        <p className="mt-2 flex items-start gap-1 break-words text-xs font-bold text-red-600">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{error}</span>
         </p>
       )}
+    </div>
+  );
+}
+
+function InfoItem({ text }: { text: string }) {
+  return (
+    <div className="flex gap-3 text-sm font-semibold leading-6 text-slate-600">
+      <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+      <span className="break-words">{text}</span>
+    </div>
+  );
+}
+
+function StepCard({
+  number,
+  title,
+  description,
+}: {
+  number: string;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="rounded-3xl border border-white/10 bg-white/10 p-4">
+      <p className="flex h-9 w-9 items-center justify-center rounded-2xl bg-white text-sm font-black text-emerald-900">
+        {number}
+      </p>
+      <h3 className="mt-4 break-words text-sm font-black text-white">
+        {title}
+      </h3>
+      <p className="mt-2 break-words text-xs font-semibold leading-5 text-emerald-50/75">
+        {description}
+      </p>
+    </div>
+  );
+}
+
+function SideCard({
+  icon,
+  title,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-start gap-3">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
+          {icon}
+        </div>
+
+        <div className="min-w-0">
+          <h2 className="break-words text-lg font-black text-slate-950">
+            {title}
+          </h2>
+          <div className="mt-3">{children}</div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -404,12 +484,6 @@ export default function VerificationPage() {
       formData.append(key, value);
     });
 
-    /*
-      The verification_requests table currently uses ghana_card_number.
-      We submit the selected ID number into both id_number and ghana_card_number
-      so the backend can store it correctly even when the user selects Passport,
-      Voter ID, Driver License, or another ID.
-    */
     formData.append('ghana_card_number', form.id_number.trim());
 
     if (idFrontFile) {
@@ -689,10 +763,10 @@ export default function VerificationPage() {
 
   if (loadingProfile) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-50">
-        <div className="text-center">
-          <Loader2 className="mx-auto h-8 w-8 animate-spin text-emerald-600" />
-          <p className="mt-3 text-sm text-slate-600">
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+        <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+          <Loader2 className="mx-auto h-10 w-10 animate-spin text-emerald-700" />
+          <p className="mt-4 text-sm font-black text-slate-600">
             Loading verification page...
           </p>
         </div>
@@ -702,47 +776,95 @@ export default function VerificationPage() {
 
   if (hasSubmittedVerification) {
     return (
-      <main className="min-h-screen bg-slate-50 px-6 py-10">
-        <div className="mx-auto max-w-2xl rounded-3xl border bg-white p-8 text-center shadow-sm">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-yellow-50 text-yellow-600">
-            <ShieldCheck size={32} />
+      <main className="min-h-screen bg-slate-50 px-4 py-6 md:px-8">
+        <div className="mx-auto max-w-4xl space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <Link
+              href="/"
+              className="inline-flex min-h-11 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm hover:bg-slate-50"
+            >
+              <Home className="h-4 w-4" />
+              Home
+            </Link>
+
+            <div className="flex flex-wrap gap-2">
+              <Link
+                href="/support"
+                className="inline-flex min-h-11 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm hover:bg-slate-50"
+              >
+                <HelpCircle className="h-4 w-4" />
+                Support
+              </Link>
+
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="inline-flex min-h-11 items-center gap-2 rounded-2xl bg-emerald-700 px-4 text-sm font-black text-white shadow-sm hover:bg-emerald-800"
+              >
+                <Clock className="h-4 w-4" />
+                Refresh Status
+              </button>
+            </div>
           </div>
 
-          <h1 className="mt-6 text-3xl font-extrabold text-slate-950">
-            Verification under review
-          </h1>
+          <section className="overflow-hidden rounded-[2rem] bg-gradient-to-br from-emerald-950 via-emerald-900 to-emerald-800 text-white shadow-sm">
+            <div className="p-6 text-center md:p-10">
+              <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-3xl bg-white text-emerald-800">
+                <ShieldCheck className="h-10 w-10" />
+              </div>
 
-          <p className="mt-4 text-slate-600">
-            Your verification has been submitted. Admin must approve your account
-            before you can join a Fund Space group.
-          </p>
+              <p className="mt-6 inline-flex items-center justify-center rounded-full bg-white/15 px-4 py-2 text-xs font-black">
+                Verification submitted
+              </p>
+
+              <h1 className="mt-5 break-words text-3xl font-black tracking-tight md:text-5xl">
+                Your verification is under review
+              </h1>
+
+              <p className="mx-auto mt-4 max-w-2xl break-words text-sm font-semibold leading-7 text-emerald-50 md:text-base">
+                Admin must approve your identity documents before you can join
+                an active Fund Space group.
+              </p>
+            </div>
+          </section>
 
           {successMessage && (
-            <div className="mt-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+            <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5 text-sm font-bold text-emerald-700">
               {successMessage}
             </div>
           )}
 
-          <div className="mt-8 rounded-2xl bg-slate-50 p-5 text-left">
-            <p className="text-sm font-semibold text-slate-700">
-              What happens next?
-            </p>
+          <section className="grid gap-4 md:grid-cols-2">
+            <SideCard
+              icon={<Clock className="h-5 w-5" />}
+              title="What happens next?"
+            >
+              <div className="space-y-3">
+                <InfoItem text="Admin checks your identity and uploaded documents." />
+                <InfoItem text="Admin reviews your ID front, ID back, and selfie photo." />
+                <InfoItem text="If approved, your account becomes verified." />
+                <InfoItem text="You can then choose a weekly Fund Space plan." />
+              </div>
+            </SideCard>
 
-            <ul className="mt-3 space-y-3 text-sm text-slate-600">
-              <li>• Admin checks your identity and uploaded documents.</li>
-              <li>• Admin reviews your ID front, ID back, and selfie photo.</li>
-              <li>• If approved, your account becomes verified.</li>
-              <li>• You can then choose a weekly Fund Space plan.</li>
-            </ul>
-          </div>
+            <SideCard
+              icon={<HelpCircle className="h-5 w-5" />}
+              title="Need help?"
+            >
+              <p className="text-sm font-semibold leading-6 text-slate-600">
+                If your verification takes too long or you uploaded the wrong
+                document, contact TrustPoint support for assistance.
+              </p>
 
-          <button
-            onClick={() => window.location.reload()}
-            className="mt-8 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white hover:bg-emerald-700"
-            type="button"
-          >
-            Refresh Status
-          </button>
+              <Link
+                href="/support"
+                className="mt-4 inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-4 text-sm font-black text-white hover:bg-emerald-800"
+              >
+                Contact Support
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+            </SideCard>
+          </section>
         </div>
       </main>
     );
@@ -750,75 +872,126 @@ export default function VerificationPage() {
 
   return (
     <main className="min-h-screen bg-slate-50">
-      <header className="border-b bg-white">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <Link href="/" className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-600 text-white">
-              <Wallet size={24} />
+      <header className="sticky top-0 z-50 border-b border-slate-200 bg-white/90 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 md:px-8">
+          <Link href="/" className="flex min-w-0 items-center gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-emerald-700 text-white">
+              <Wallet className="h-5 w-5" />
             </div>
 
-            <div>
-              <h1 className="text-xl font-bold leading-none text-slate-950">
+            <div className="min-w-0">
+              <h1 className="truncate text-lg font-black leading-none text-slate-950">
                 TrustPoint
               </h1>
-              <p className="text-sm font-medium text-emerald-600">
-                Fund Space
+              <p className="truncate text-xs font-bold text-emerald-700">
+                Fund Space Verification
               </p>
             </div>
           </Link>
 
-          <button
-            type="button"
-            onClick={async () => {
-              await supabase.auth.signOut();
-              router.push('/auth/login');
-            }}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            Logout
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href="/"
+              className="inline-flex min-h-10 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm hover:bg-slate-50"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Home
+            </Link>
+
+            <Link
+              href="/support"
+              className="hidden min-h-10 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm hover:bg-slate-50 sm:inline-flex"
+            >
+              <HelpCircle className="h-4 w-4" />
+              Support
+            </Link>
+
+            <button
+              type="button"
+              onClick={async () => {
+                await supabase.auth.signOut();
+                router.push('/auth/login');
+              }}
+              className="inline-flex min-h-10 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm hover:bg-slate-50"
+            >
+              <LogOut className="h-4 w-4" />
+              Logout
+            </button>
+          </div>
         </div>
       </header>
 
-      <section className="mx-auto max-w-6xl px-6 py-10">
-        <div className="mb-8 max-w-3xl">
-          <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700">
-            <ShieldCheck size={16} />
-            Strict verification required
+      <section className="mx-auto max-w-7xl px-4 py-6 md:px-8 md:py-8">
+        <div className="mb-6 overflow-hidden rounded-[2rem] bg-gradient-to-br from-emerald-950 via-emerald-900 to-emerald-800 text-white shadow-sm">
+          <div className="grid gap-6 p-6 md:p-8 lg:grid-cols-[1fr_420px] lg:items-center">
+            <div className="min-w-0">
+              <p className="inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-2 text-xs font-black">
+                <ShieldCheck className="h-4 w-4" />
+                Strict verification required
+              </p>
+
+              <h1 className="mt-5 break-words text-3xl font-black tracking-tight md:text-5xl">
+                Complete your TrustPoint verification
+              </h1>
+
+              <p className="mt-4 max-w-3xl break-words text-sm font-semibold leading-7 text-emerald-50 md:text-base">
+                To protect every Fund Space member, upload your selected ID
+                document, personal details, emergency contact, and a clear
+                selfie. Admin must approve your account before you can join an
+                active Fund Space group.
+              </p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+              <StepCard
+                number="1"
+                title="Submit your details"
+                description="Fill in your identity, contact, work, and emergency details."
+              />
+
+              <StepCard
+                number="2"
+                title="Upload documents"
+                description="Upload ID front, ID back, and selfie photo for review."
+              />
+
+              <StepCard
+                number="3"
+                title="Wait for approval"
+                description="Admin reviews your verification before you join Fund Space."
+              />
+            </div>
           </div>
-
-          <h1 className="text-3xl font-extrabold text-slate-950 sm:text-4xl">
-            Complete your TrustPoint verification
-          </h1>
-
-          <p className="mt-4 text-slate-600">
-            To protect every member, upload your selected ID document and a
-            clear selfie/passport photo. Admin must approve your account before
-            you can join a Fund Space group.
-          </p>
         </div>
 
         {errorMessage && (
-          <div className="mb-6 flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
-            <AlertCircle className="mt-0.5 shrink-0" size={18} />
-            <span>{errorMessage}</span>
+          <div className="mb-5 flex items-start gap-3 rounded-3xl border border-red-200 bg-red-50 p-5 text-sm font-bold text-red-700">
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+            <span className="break-words [overflow-wrap:anywhere]">
+              {errorMessage}
+            </span>
           </div>
         )}
 
         {successMessage && (
-          <div className="mb-6 flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-700">
-            <CheckCircle2 className="mt-0.5 shrink-0" size={18} />
-            <span>{successMessage}</span>
+          <div className="mb-5 flex items-start gap-3 rounded-3xl border border-emerald-200 bg-emerald-50 p-5 text-sm font-bold text-emerald-700">
+            <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
+            <span className="break-words [overflow-wrap:anywhere]">
+              {successMessage}
+            </span>
           </div>
         )}
 
-        <div className="grid gap-8 lg:grid-cols-[1fr_360px]">
+        <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
           <form onSubmit={handleSubmit} className="space-y-5">
             <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
-              <div className="mb-5 flex items-center justify-between gap-3">
-                <h2 className={sectionTitleClass()}>Personal Information</h2>
+              <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                <h2 className={sectionTitleClass()}>
+                  <BadgeCheck className="h-5 w-5 text-emerald-700" />
+                  Personal Information
+                </h2>
 
-                <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
+                <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">
                   Required
                 </span>
               </div>
@@ -835,7 +1008,7 @@ export default function VerificationPage() {
                     placeholder="Enter your full name"
                   />
                   {validation.full_name && (
-                    <p className="mt-2 text-xs font-semibold text-red-600">
+                    <p className="mt-2 text-xs font-bold text-red-600">
                       {validation.full_name}
                     </p>
                   )}
@@ -852,7 +1025,7 @@ export default function VerificationPage() {
                     placeholder="0240000000"
                   />
                   {validation.phone && (
-                    <p className="mt-2 text-xs font-semibold text-red-600">
+                    <p className="mt-2 text-xs font-bold text-red-600">
                       {validation.phone}
                     </p>
                   )}
@@ -911,7 +1084,7 @@ export default function VerificationPage() {
                       updateField('region', event.target.value)
                     }
                     className={inputClass()}
-                    placeholder="Greater Accra, Ashanti, etc."
+                    placeholder="Greater Accra, Ashanti, Bono..."
                   />
                 </div>
 
@@ -923,7 +1096,7 @@ export default function VerificationPage() {
                       updateField('city', event.target.value)
                     }
                     className={inputClass()}
-                    placeholder="Accra, Kumasi, etc."
+                    placeholder="Accra, Kumasi, Sunyani..."
                   />
                 </div>
 
@@ -969,10 +1142,13 @@ export default function VerificationPage() {
             </section>
 
             <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
-              <div className="mb-5 flex items-center justify-between gap-3">
-                <h2 className={sectionTitleClass()}>ID Verification</h2>
+              <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                <h2 className={sectionTitleClass()}>
+                  <ShieldCheck className="h-5 w-5 text-emerald-700" />
+                  ID Verification
+                </h2>
 
-                <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-bold text-red-700">
+                <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-black text-red-700">
                   Required
                 </span>
               </div>
@@ -995,7 +1171,7 @@ export default function VerificationPage() {
                     ))}
                   </select>
                   {validation.id_type && (
-                    <p className="mt-2 text-xs font-semibold text-red-600">
+                    <p className="mt-2 text-xs font-bold text-red-600">
                       {validation.id_type}
                     </p>
                   )}
@@ -1012,7 +1188,7 @@ export default function VerificationPage() {
                     placeholder="Enter the selected ID number"
                   />
                   {validation.id_number && (
-                    <p className="mt-2 text-xs font-semibold text-red-600">
+                    <p className="mt-2 text-xs font-bold text-red-600">
                       {validation.id_number}
                     </p>
                   )}
@@ -1047,7 +1223,10 @@ export default function VerificationPage() {
             </section>
 
             <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
-              <h2 className={sectionTitleClass()}>Work or Business Details</h2>
+              <h2 className={sectionTitleClass()}>
+                <Users className="h-5 w-5 text-emerald-700" />
+                Work or Business Details
+              </h2>
 
               <div className="mt-5 grid gap-4 md:grid-cols-2">
                 <div>
@@ -1075,7 +1254,7 @@ export default function VerificationPage() {
                     placeholder="School, hospital, office..."
                   />
                   {validation.employer_name && (
-                    <p className="mt-2 text-xs font-semibold text-red-600">
+                    <p className="mt-2 text-xs font-bold text-red-600">
                       {validation.employer_name}
                     </p>
                   )}
@@ -1130,7 +1309,7 @@ export default function VerificationPage() {
                     placeholder="Market name or business area"
                   />
                   {validation.business_location && (
-                    <p className="mt-2 text-xs font-semibold text-red-600">
+                    <p className="mt-2 text-xs font-bold text-red-600">
                       {validation.business_location}
                     </p>
                   )}
@@ -1140,6 +1319,7 @@ export default function VerificationPage() {
 
             <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
               <h2 className={sectionTitleClass()}>
+                <Smartphone className="h-5 w-5 text-emerald-700" />
                 Emergency and Payment Details
               </h2>
 
@@ -1162,7 +1342,7 @@ export default function VerificationPage() {
                     placeholder="Name of trusted contact"
                   />
                   {validation.emergency_contact_name && (
-                    <p className="mt-2 text-xs font-semibold text-red-600">
+                    <p className="mt-2 text-xs font-bold text-red-600">
                       {validation.emergency_contact_name}
                     </p>
                   )}
@@ -1186,7 +1366,7 @@ export default function VerificationPage() {
                     placeholder="Contact phone number"
                   />
                   {validation.emergency_contact_phone && (
-                    <p className="mt-2 text-xs font-semibold text-red-600">
+                    <p className="mt-2 text-xs font-bold text-red-600">
                       {validation.emergency_contact_phone}
                     </p>
                   )}
@@ -1245,56 +1425,76 @@ export default function VerificationPage() {
             <button
               type="submit"
               disabled={submitting}
-              className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-70"
+              className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-black text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-70"
             >
               {submitting ? (
                 <>
-                  <Loader2 size={18} className="animate-spin" />
+                  <Loader2 className="h-5 w-5 animate-spin" />
                   Submitting Verification...
                 </>
               ) : (
                 <>
-                  <Upload size={18} />
+                  <Upload className="h-5 w-5" />
                   Submit Verification
-                  <ArrowRight size={18} />
+                  <ArrowRight className="h-5 w-5" />
                 </>
               )}
             </button>
           </form>
 
-          <aside className="h-fit rounded-3xl border bg-white p-6 shadow-sm">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
-              <ShieldCheck size={24} />
-            </div>
+          <aside className="space-y-5">
+            <SideCard
+              icon={<ShieldCheck className="h-5 w-5" />}
+              title="Why verification is required"
+            >
+              <p className="text-sm font-semibold leading-6 text-slate-600">
+                TrustPoint Fund Space handles real contribution money. Strict
+                verification protects members from fake accounts, wrong identity
+                records, and contribution default.
+              </p>
 
-            <h2 className="mt-5 text-xl font-extrabold text-slate-950">
-              Why verification is required
-            </h2>
+              <div className="mt-5 space-y-4">
+                <InfoItem text="Only verified users can join Fund Space groups." />
+                <InfoItem text="Admin must review your uploaded ID documents." />
+                <InfoItem text="Your selfie helps confirm that the ID belongs to you." />
+                <InfoItem text="Payouts require admin approval and proper records." />
+                <InfoItem text="Defaulters can be suspended or blacklisted." />
+              </div>
+            </SideCard>
 
-            <p className="mt-3 text-sm leading-6 text-slate-600">
-              TrustPoint Fund Space handles real contribution money. Strict
-              verification protects members from fake accounts and default.
-            </p>
+            <SideCard
+              icon={<BadgeCheck className="h-5 w-5" />}
+              title="Verification checklist"
+            >
+              <div className="space-y-4">
+                <InfoItem text="Use your real full name and active phone number." />
+                <InfoItem text="Upload clear images, not blurred screenshots." />
+                <InfoItem text="Make sure your ID number matches the selected ID." />
+                <InfoItem text="Provide an emergency contact who can be reached." />
+                <InfoItem text="Add your MoMo number for future payout records." />
+              </div>
+            </SideCard>
 
-            <div className="mt-6 space-y-4">
-              <InfoItem text="Only verified users can join groups." />
-              <InfoItem text="Admin must review your uploaded ID documents." />
-              <InfoItem text="Your selfie helps confirm that the ID belongs to you." />
-              <InfoItem text="Payouts require admin approval." />
-              <InfoItem text="Defaulters can be suspended or blacklisted." />
-            </div>
+            <SideCard
+              icon={<HelpCircle className="h-5 w-5" />}
+              title="Need help?"
+            >
+              <p className="text-sm font-semibold leading-6 text-slate-600">
+                If you are unable to upload your ID or your verification was
+                rejected, contact support for help.
+              </p>
+
+              <Link
+                href="/support"
+                className="mt-4 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 hover:bg-slate-50"
+              >
+                Contact Support
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+            </SideCard>
           </aside>
         </div>
       </section>
     </main>
-  );
-}
-
-function InfoItem({ text }: { text: string }) {
-  return (
-    <div className="flex gap-3 text-sm text-slate-600">
-      <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
-      <span>{text}</span>
-    </div>
   );
 }
