@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   Smartphone,
   UserRound,
+  WalletCards,
   X,
 } from 'lucide-react';
 
@@ -41,6 +42,7 @@ type ManualPaymentResponse = {
   success?: boolean;
   message?: string;
   result?: unknown;
+  submission?: unknown;
 };
 
 type PayerType = 'CUSTOMER_SELF' | 'THIRD_PARTY' | 'AGENT_ASSISTED';
@@ -66,6 +68,22 @@ function calculateServiceFee(amountDue: number) {
   return Math.max(Number((Number(amountDue || 0) * 0.03).toFixed(2)), 2);
 }
 
+function getTodayDateValue() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function getCurrentTimeValue() {
+  const now = new Date();
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+
+  return `${hours}:${minutes}`;
+}
+
+function normalizeText(value: string | null | undefined) {
+  return String(value || '').trim();
+}
+
 function getSenderNetworkOptions() {
   return [
     { value: '', label: 'Select sender network' },
@@ -84,49 +102,87 @@ function getRelationshipOptions(payerType: PayerType) {
 
   if (payerType === 'AGENT_ASSISTED') {
     return [
-      { value: 'Agent', label: 'Agent' },
-      { value: 'Field Officer', label: 'Field Officer' },
-      { value: 'Other', label: 'Other' },
+      { value: 'Agent assisted payment', label: 'Agent assisted payment' },
+      {
+        value: 'Customer paid through agent',
+        label: 'Customer paid through agent',
+      },
     ];
   }
 
   return [
-    { value: '', label: 'Select relationship to customer' },
-    { value: 'Mother', label: 'Mother' },
-    { value: 'Father', label: 'Father' },
-    { value: 'Brother', label: 'Brother' },
-    { value: 'Sister', label: 'Sister' },
-    { value: 'Husband', label: 'Husband' },
-    { value: 'Wife', label: 'Wife' },
+    { value: '', label: 'Select relationship' },
+    { value: 'Parent', label: 'Parent' },
     { value: 'Spouse', label: 'Spouse' },
+    { value: 'Sibling', label: 'Sibling' },
+    { value: 'Child', label: 'Child' },
     { value: 'Friend', label: 'Friend' },
-    { value: 'Relative', label: 'Relative' },
-    { value: 'Customer used another phone', label: 'Customer used another phone' },
+    { value: 'Business partner', label: 'Business partner' },
     { value: 'Other', label: 'Other' },
   ];
 }
 
-function getPayerTypeLabel(value: PayerType) {
-  if (value === 'CUSTOMER_SELF') return 'Customer paid personally';
-  if (value === 'THIRD_PARTY') return 'Someone paid for the customer';
-  return 'Agent assisted the payment';
+function getManualPaymentEndpoint() {
+  if (typeof window === 'undefined') {
+    return '/api/fund-space/manual-payment-submissions';
+  }
+
+  const path = window.location.pathname.toLowerCase();
+
+  if (path.startsWith('/agent')) {
+    return '/api/agent/fund-space/manual-payment-submissions';
+  }
+
+  return '/api/fund-space/manual-payment-submissions';
 }
 
-export function ManualMerchantPaymentModal({
+async function readApiResponse(response: Response): Promise<ManualPaymentResponse> {
+  const text = await response.text();
+
+  if (!text) {
+    return {
+      success: false,
+      message: 'The server returned an empty response.',
+    };
+  }
+
+  try {
+    return JSON.parse(text) as ManualPaymentResponse;
+  } catch {
+    return {
+      success: false,
+      message: 'The server returned an invalid response.',
+    };
+  }
+}
+
+async function copyToClipboard(value: string) {
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+ function ManualMerchantPaymentModal({
   open,
   onClose,
   onSubmitted,
   contributionId,
   customerName,
   amountDue,
-  title = 'Complete MoMo Payment',
+  title,
 }: ManualMerchantPaymentModalProps) {
-  const [companyAccount, setCompanyAccount] =
-    useState<CompanyPaymentAccount | null>(null);
+  const serviceFee = useMemo(() => calculateServiceFee(amountDue), [amountDue]);
 
-  const [loadingAccount, setLoadingAccount] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [copyMessage, setCopyMessage] = useState('');
+  const totalAmount = useMemo(() => {
+    return Number((Number(amountDue || 0) + serviceFee).toFixed(2));
+  }, [amountDue, serviceFee]);
+
+  const [loadingAccounts, setLoadingAccounts] = useState(false);
+  const [accounts, setAccounts] = useState<CompanyPaymentAccount[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState('');
+  const [copiedValue, setCopiedValue] = useState('');
 
   const [payerType, setPayerType] = useState<PayerType>('CUSTOMER_SELF');
   const [payerRelationship, setPayerRelationship] = useState('Self');
@@ -135,602 +191,593 @@ export function ManualMerchantPaymentModal({
   const [senderPhone, setSenderPhone] = useState('');
   const [senderNetwork, setSenderNetwork] = useState('');
   const [transactionReference, setTransactionReference] = useState('');
-  const [totalAmountPaid, setTotalAmountPaid] = useState('');
   const [paymentNote, setPaymentNote] = useState('');
+  const [screenshotUrl, setScreenshotUrl] = useState('');
 
-  const [message, setMessage] = useState<{
-    type: 'success' | 'error';
-    text: string;
-  } | null>(null);
-
-  const serviceFee = useMemo(() => calculateServiceFee(amountDue), [amountDue]);
-
-  const expectedTotal = useMemo(
-    () => Number(amountDue || 0) + serviceFee,
-    [amountDue, serviceFee]
+  const [actualPaymentDate, setActualPaymentDate] = useState(
+    getTodayDateValue()
+  );
+  const [actualPaymentTime, setActualPaymentTime] = useState(
+    getCurrentTimeValue()
   );
 
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+
+  const selectedAccount = useMemo(() => {
+    return (
+      accounts.find((account) => account.id === selectedAccountId) ||
+      accounts.find((account) => account.is_default) ||
+      accounts[0] ||
+      null
+    );
+  }, [accounts, selectedAccountId]);
+
+  const relationshipOptions = useMemo(() => {
+    return getRelationshipOptions(payerType);
+  }, [payerType]);
+
   useEffect(() => {
     if (!open) return;
 
-    setPayerType('CUSTOMER_SELF');
-    setPayerRelationship('Self');
-    setSenderName('');
-    setSenderPhone('');
-    setSenderNetwork('');
-    setTransactionReference('');
-    setTotalAmountPaid(expectedTotal.toFixed(2));
-    setPaymentNote('');
-    setCopyMessage('');
-    setMessage(null);
+    setCopiedValue('');
+    setErrorMessage('');
+    setSuccessMessage('');
+    setActualPaymentDate(getTodayDateValue());
+    setActualPaymentTime(getCurrentTimeValue());
+    loadCompanyAccounts();
 
-    loadCompanyAccount();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, expectedTotal]);
-
-  useEffect(() => {
-    if (!open) return;
-
-    const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
 
     return () => {
-      document.body.style.overflow = originalOverflow;
+      document.body.style.overflow = '';
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const relationshipOptions = useMemo(
-    () => getRelationshipOptions(payerType),
-    [payerType]
-  );
-
-  const getAccessToken = async () => {
-    const {
-      data: { session },
-      error,
-    } = await supabase.auth.getSession();
-
-    if (error || !session?.access_token) {
-      throw new Error('Your session has expired. Please log in again.');
-    }
-
-    return session.access_token;
-  };
-
-  const loadCompanyAccount = async () => {
-    try {
-      setLoadingAccount(true);
-      setCompanyAccount(null);
-
-      const response = await fetch(
-        '/api/company-payment-accounts?default_only=true',
-        {
-          method: 'GET',
-        }
-      );
-
-      const result = (await response.json()) as CompanyAccountsResponse;
-
-      if (!response.ok || !result.success) {
-        throw new Error(
-          result.message || 'Unable to load company payment account.'
-        );
-      }
-
-      setCompanyAccount(result.default_account || null);
-    } catch (error) {
-      setMessage({
-        type: 'error',
-        text:
-          error instanceof Error
-            ? error.message
-            : 'Unable to load company merchant account.',
-      });
-    } finally {
-      setLoadingAccount(false);
-    }
-  };
-
-  const copyToClipboard = async (value: string, label: string) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopyMessage(`${label} copied successfully.`);
-      window.setTimeout(() => setCopyMessage(''), 2500);
-    } catch {
-      setCopyMessage('Could not copy. Please copy manually.');
-      window.setTimeout(() => setCopyMessage(''), 2500);
-    }
-  };
-
-  const handlePayerTypeChange = (value: PayerType) => {
-    setPayerType(value);
-
-    if (value === 'CUSTOMER_SELF') {
+  useEffect(() => {
+    if (payerType === 'CUSTOMER_SELF') {
       setPayerRelationship('Self');
       return;
     }
 
-    if (value === 'AGENT_ASSISTED') {
-      setPayerRelationship('Agent');
+    if (payerType === 'AGENT_ASSISTED') {
+      setPayerRelationship('Agent assisted payment');
       return;
     }
 
     setPayerRelationship('');
-  };
+  }, [payerType]);
 
-  const handleSubmit = async () => {
+  async function loadCompanyAccounts() {
+    try {
+      setLoadingAccounts(true);
+
+      const response = await fetch('/api/company-payment-accounts', {
+        method: 'GET',
+      });
+
+      const text = await response.text();
+
+      let result: CompanyAccountsResponse | null = null;
+
+      try {
+        result = text ? (JSON.parse(text) as CompanyAccountsResponse) : null;
+      } catch {
+        result = null;
+      }
+
+      if (!response.ok || !result?.success) {
+        setAccounts([]);
+        setSelectedAccountId('');
+        return;
+      }
+
+      const activeAccounts = (result.accounts || []).filter(
+        (account) => account.is_active
+      );
+
+      setAccounts(activeAccounts);
+
+      const defaultAccount =
+        result.default_account ||
+        activeAccounts.find((account) => account.is_default) ||
+        activeAccounts[0] ||
+        null;
+
+      setSelectedAccountId(defaultAccount?.id || '');
+    } catch {
+      setAccounts([]);
+      setSelectedAccountId('');
+    } finally {
+      setLoadingAccounts(false);
+    }
+  }
+
+  function validateForm() {
+    if (!contributionId) return 'Contribution ID is missing.';
+    if (!senderName.trim()) return 'Sender name is required.';
+    if (!senderPhone.trim()) return 'Sender phone number is required.';
+    if (!senderNetwork.trim()) return 'Please select the sender network.';
+    if (!transactionReference.trim()) return 'MoMo transaction reference is required.';
+    if (!actualPaymentDate.trim()) return 'Please select the actual payment date.';
+    if (!actualPaymentTime.trim()) return 'Please select the actual payment time.';
+
+    if (payerType !== 'CUSTOMER_SELF' && !payerRelationship.trim()) {
+      return 'Please select the payer relationship.';
+    }
+
+    return '';
+  }
+
+  async function handleSubmit() {
     try {
       setSubmitting(true);
-      setMessage(null);
+      setErrorMessage('');
+      setSuccessMessage('');
 
-      if (!companyAccount?.id) {
-        throw new Error('Company merchant account is not available.');
+      const validationError = validateForm();
+
+      if (validationError) {
+        throw new Error(validationError);
       }
 
-      if (!contributionId) {
-        throw new Error('Contribution record is missing. Please refresh.');
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError || !session?.access_token) {
+        throw new Error('Your session has expired. Please log in again.');
       }
 
-      if (!transactionReference.trim()) {
-        throw new Error('Please enter the MoMo transaction reference.');
-      }
-
-      if (!totalAmountPaid || Number(totalAmountPaid) <= 0) {
-        throw new Error('Please enter the total amount you paid.');
-      }
-
-      if (payerType !== 'CUSTOMER_SELF' && !payerRelationship.trim()) {
-        throw new Error(
-          'Please select the relationship of the person who made this payment.'
-        );
-      }
-
-      const token = await getAccessToken();
-
-      const response = await fetch('/api/fund-space/manual-payment-submissions', {
+      const response = await fetch(getManualPaymentEndpoint(), {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${session.access_token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           contribution_id: contributionId,
-          total_amount_paid: totalAmountPaid,
-          transaction_reference: transactionReference.trim(),
-          sender_name: senderName.trim(),
-          sender_phone: senderPhone.trim(),
-          sender_network: senderNetwork,
-          company_payment_account_id: companyAccount.id,
+          company_payment_account_id: selectedAccount?.id || null,
+
+          amount_due: Number(amountDue || 0),
+          service_fee: Number(serviceFee || 0),
+          total_amount_paid: Number(totalAmount || 0),
+
+          sender_name: normalizeText(senderName),
+          sender_phone: normalizeText(senderPhone),
+          sender_network: normalizeText(senderNetwork),
+
+          transaction_reference: normalizeText(transactionReference),
+          payment_note: normalizeText(paymentNote),
+          screenshot_url: normalizeText(screenshotUrl),
+
           payer_type: payerType,
-          payer_relationship: payerRelationship.trim(),
-          payment_note: paymentNote.trim(),
+          payer_relationship: normalizeText(payerRelationship),
+
+          actual_payment_date: actualPaymentDate,
+          actual_payment_time: actualPaymentTime,
         }),
       });
 
-      const result = (await response.json()) as ManualPaymentResponse;
+      const result = await readApiResponse(response);
 
       if (!response.ok || !result.success) {
-        throw new Error(result.message || 'Unable to submit payment.');
+        throw new Error(
+          result.message || 'Unable to submit MoMo payment for review.'
+        );
       }
 
-      setMessage({
-        type: 'success',
-        text:
-          result.message ||
-          'Payment submitted successfully and is awaiting admin verification.',
-      });
+      setSuccessMessage(
+        result.message ||
+          'Payment submitted successfully. Admin will review and approve it.'
+      );
 
       await onSubmitted?.();
 
-      window.setTimeout(() => {
+      setTimeout(() => {
         onClose();
-      }, 900);
+      }, 1000);
     } catch (error) {
-      setMessage({
-        type: 'error',
-        text:
-          error instanceof Error
-            ? error.message
-            : 'Something went wrong while submitting payment.',
-      });
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : 'Unable to submit MoMo payment for review.'
+      );
     } finally {
       setSubmitting(false);
     }
-  };
+  }
+
+  async function handleCopy(value: string, label: string) {
+    const copied = await copyToClipboard(value);
+
+    if (copied) {
+      setCopiedValue(label);
+      setTimeout(() => setCopiedValue(''), 1500);
+    }
+  }
 
   if (!open) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-[9999] overflow-y-auto bg-slate-950/60 px-3 py-6 backdrop-blur-sm sm:px-6"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="manual-momo-payment-title"
-    >
-      <div className="flex min-h-full items-center justify-center">
-        <button
-          type="button"
-          aria-label="Close modal overlay"
-          className="fixed inset-0 cursor-default"
-          onClick={submitting ? undefined : onClose}
-        />
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-3 py-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="flex w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+        style={{
+          maxHeight: '88vh',
+        }}
+      >
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 bg-white px-5 py-4">
+          <div>
+            <p className="mb-2 inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">
+              <Smartphone className="h-4 w-4" />
+              Manual Mobile Money
+            </p>
 
-        <div className="relative z-10 flex w-full max-w-3xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl max-h-[calc(100vh-48px)]">
-          <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-100 bg-white px-4 py-4 sm:px-6 sm:py-5">
-            <div className="min-w-0">
-              <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-black uppercase tracking-wide text-emerald-700">
-                <Smartphone className="h-3.5 w-3.5" />
-                TrustPoint MoMo
-              </div>
+            <h2 className="text-lg font-black text-slate-900">
+              {title || 'Pay with MoMo'}
+            </h2>
 
-              <h2
-                id="manual-momo-payment-title"
-                className="text-xl font-black text-slate-950 sm:text-2xl"
-              >
-                {title}
-              </h2>
-
-              <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500 sm:text-sm">
-                Pay to the TrustPoint merchant line, then submit your transaction
-                reference for verification.
-              </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={submitting}
-              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-              aria-label="Close payment modal"
-            >
-              <X className="h-5 w-5" />
-            </button>
+            <p className="mt-1 text-sm leading-6 text-slate-500">
+              Send your MoMo payment, then submit the transaction details for
+              admin review.
+            </p>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
-            {message && (
-              <div
-                className={`mb-5 flex items-start gap-3 rounded-2xl border p-4 text-sm font-semibold ${
-                  message.type === 'success'
-                    ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
-                    : 'border-red-100 bg-red-50 text-red-700'
-                }`}
-              >
-                {message.type === 'success' ? (
-                  <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
-                ) : (
-                  <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
-                )}
-                <p>{message.text}</p>
-              </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="rounded-2xl p-2 text-slate-500 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div
+          className="flex-1 overflow-y-auto px-5 py-5"
+          style={{
+            WebkitOverflowScrolling: 'touch',
+          }}
+        >
+          <div className="space-y-5 pb-2">
+            {successMessage && (
+              <MessageBox type="success" message={successMessage} />
             )}
 
-            <section className="rounded-3xl border border-emerald-100 bg-emerald-50 p-4 sm:p-5">
+            {errorMessage && <MessageBox type="error" message={errorMessage} />}
+
+            <section className="rounded-3xl border border-emerald-100 bg-emerald-50 p-4">
               <div className="flex items-start gap-3">
-                <div className="rounded-2xl bg-emerald-600 p-3 text-white shadow-sm">
-                  <Smartphone className="h-6 w-6" />
+                <div className="rounded-2xl bg-white p-3 text-emerald-700">
+                  <WalletCards className="h-5 w-5" />
                 </div>
 
-                <div>
-                  <h3 className="text-base font-black text-slate-950">
-                    Merchant Payment Details
+                <div className="flex-1">
+                  <h3 className="font-black text-emerald-950">
+                    Amount to Pay
                   </h3>
-                  <p className="mt-1 text-sm leading-6 text-emerald-700">
-                    Send your contribution to this official TrustPoint payment
-                    account.
-                  </p>
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                    <AmountBox
+                      label="Contribution"
+                      value={formatCurrency(amountDue)}
+                    />
+                    <AmountBox
+                      label="Service Fee"
+                      value={formatCurrency(serviceFee)}
+                    />
+                    <AmountBox
+                      label="Total"
+                      value={formatCurrency(totalAmount)}
+                      strong
+                    />
+                  </div>
                 </div>
               </div>
+            </section>
 
-              {loadingAccount ? (
-                <div className="mt-5 flex items-center gap-3 rounded-2xl bg-white p-4 text-sm font-semibold text-emerald-700">
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                  Loading merchant account...
+            <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+              <SectionHeader
+                icon={<ShieldCheck className="h-5 w-5" />}
+                title="TrustPoint Payment Account"
+                description="Send the total amount to this account."
+              />
+
+              {loadingAccounts ? (
+                <div className="mt-4 flex items-center gap-2 rounded-2xl bg-slate-50 p-4 text-sm font-bold text-slate-600">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading payment account...
                 </div>
-              ) : companyAccount ? (
-                <div className="mt-5 space-y-3">
-                  <DetailBox
-                    label="Account Name"
-                    value={companyAccount.account_name}
-                  />
+              ) : selectedAccount ? (
+                <div className="mt-4 space-y-4">
+                  {accounts.length > 1 && (
+                    <label className="block">
+                      <span className="text-sm font-black text-slate-700">
+                        Choose payment account
+                      </span>
+                      <select
+                        value={selectedAccountId}
+                        onChange={(event) =>
+                          setSelectedAccountId(event.target.value)
+                        }
+                        className="mt-2 min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-semibold text-slate-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                      >
+                        {accounts.map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.account_name} • {account.network_label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
 
-                  <DetailBox
-                    label="Payment Network"
-                    value={companyAccount.network_label}
-                  />
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <CopyBox
+                      label="Account Name"
+                      value={selectedAccount.account_name}
+                      copiedValue={copiedValue}
+                      onCopy={handleCopy}
+                    />
 
-                  <CopyBox
-                    label="Merchant Number"
-                    value={companyAccount.merchant_number}
-                    onCopy={() =>
-                      copyToClipboard(
-                        companyAccount.merchant_number,
-                        'Merchant number'
-                      )
-                    }
-                  />
+                    <CopyBox
+                      label="Network"
+                      value={selectedAccount.network_label}
+                      copiedValue={copiedValue}
+                      onCopy={handleCopy}
+                    />
 
-                  {companyAccount.merchant_id && (
+                    <CopyBox
+                      label="MoMo Number"
+                      value={selectedAccount.merchant_number}
+                      copiedValue={copiedValue}
+                      onCopy={handleCopy}
+                      highlight
+                    />
+
                     <CopyBox
                       label="Merchant ID"
-                      value={companyAccount.merchant_id}
-                      onCopy={() =>
-                        copyToClipboard(
-                          companyAccount.merchant_id || '',
-                          'Merchant ID'
-                        )
-                      }
+                      value={selectedAccount.merchant_id || 'Not provided'}
+                      copiedValue={copiedValue}
+                      onCopy={handleCopy}
                     />
-                  )}
+                  </div>
 
-                  {copyMessage && (
-                    <div className="flex items-start gap-2 rounded-2xl border border-emerald-100 bg-white p-3 text-sm font-bold text-emerald-700">
-                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-                      <p>{copyMessage}</p>
-                    </div>
-                  )}
-
-                  {companyAccount.instructions && (
-                    <div className="rounded-2xl border border-emerald-100 bg-white p-4">
-                      <p className="mb-1 text-xs font-black uppercase tracking-wide text-emerald-700">
-                        Instructions
-                      </p>
-                      <p className="text-sm leading-6 text-slate-600">
-                        {companyAccount.instructions}
+                  {selectedAccount.instructions && (
+                    <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+                      <p className="text-sm font-bold leading-6 text-emerald-800">
+                        {selectedAccount.instructions}
                       </p>
                     </div>
                   )}
                 </div>
               ) : (
-                <div className="mt-5 rounded-2xl border border-red-100 bg-white p-4 text-sm font-semibold text-red-700">
-                  No active company merchant account found. Please contact
-                  support before making payment.
+                <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-700">
+                  <div className="flex items-start gap-3">
+                    <Info className="mt-0.5 h-5 w-5 shrink-0" />
+                    <p className="text-sm font-bold leading-6">
+                      No TrustPoint payment account was loaded. Contact admin if
+                      you do not know the correct MoMo account.
+                    </p>
+                  </div>
                 </div>
               )}
             </section>
 
-            <section className="mt-4 rounded-3xl border border-slate-100 bg-white p-4 shadow-sm sm:p-5">
-              <div className="flex items-start gap-3">
-                <div className="rounded-2xl bg-slate-100 p-3 text-slate-700">
-                  <ClipboardCheck className="h-6 w-6" />
-                </div>
+            <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+              <SectionHeader
+                icon={<UserRound className="h-5 w-5" />}
+                title="Sender Details"
+                description="Enter the sender details exactly as shown on the MoMo transaction."
+              />
 
-                <div>
-                  <h3 className="text-base font-black text-slate-950">
-                    Amount to Pay
-                  </h3>
-                  <p className="mt-1 text-sm leading-6 text-slate-500">
-                    Pay the total amount below, then submit your transaction ID.
-                  </p>
-                </div>
-              </div>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <label className="block">
+                  <span className="text-sm font-black text-slate-700">
+                    Who paid? <span className="text-red-500">*</span>
+                  </span>
+                  <select
+                    value={payerType}
+                    onChange={(event) =>
+                      setPayerType(event.target.value as PayerType)
+                    }
+                    className="mt-2 min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-semibold text-slate-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  >
+                    <option value="CUSTOMER_SELF">
+                      Customer paid personally
+                    </option>
+                    <option value="THIRD_PARTY">
+                      Someone paid for customer
+                    </option>
+                    <option value="AGENT_ASSISTED">
+                      Agent assisted payment
+                    </option>
+                  </select>
+                </label>
 
-              <div className="mt-5 space-y-3">
-                <BreakdownRow
-                  label="Customer"
-                  value={customerName || 'Customer'}
-                />
-
-                <BreakdownRow
-                  label="Weekly Contribution"
-                  value={formatCurrency(amountDue)}
-                />
-
-                <BreakdownRow
-                  label="Service Fee"
-                  value={formatCurrency(serviceFee)}
-                />
-
-                <div className="rounded-3xl bg-emerald-600 p-5 text-white">
-                  <p className="text-sm font-bold text-emerald-50">
-                    Total to Pay
-                  </p>
-                  <p className="mt-1 text-3xl font-black">
-                    {formatCurrency(expectedTotal)}
-                  </p>
-                  <p className="mt-2 text-xs leading-5 text-emerald-50">
-                    Please pay this exact amount to make admin verification
-                    faster.
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-4 flex items-start gap-3 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm leading-6 text-amber-800">
-                <Info className="mt-0.5 h-5 w-5 shrink-0" />
-                <p>
-                  The contribution belongs to the registered customer, even when
-                  another person sends the MoMo payment on their behalf.
-                </p>
-              </div>
-            </section>
-
-            <section className="mt-4 rounded-3xl border border-slate-100 bg-slate-50 p-4 sm:p-5">
-              <div className="flex items-start gap-3">
-                <div className="rounded-2xl bg-white p-3 text-emerald-700 shadow-sm">
-                  <UserRound className="h-6 w-6" />
-                </div>
-
-                <div>
-                  <h3 className="text-base font-black text-slate-950">
-                    Who Made This Payment?
-                  </h3>
-                  <p className="mt-1 text-sm leading-6 text-slate-500">
-                    Select this correctly so admin can verify third-party
-                    payments without confusion.
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-5 grid gap-3">
-                {(['CUSTOMER_SELF', 'THIRD_PARTY', 'AGENT_ASSISTED'] as const).map(
-                  (item) => (
-                    <button
-                      key={item}
-                      type="button"
-                      onClick={() => handlePayerTypeChange(item)}
-                      className={`rounded-2xl border p-4 text-left transition ${
-                        payerType === item
-                          ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                      }`}
-                    >
-                      <p className="font-black">{getPayerTypeLabel(item)}</p>
-                      <p className="mt-1 text-sm leading-5 opacity-80">
-                        {item === 'CUSTOMER_SELF'
-                          ? 'Use this when the customer paid with their own MoMo number.'
-                          : item === 'THIRD_PARTY'
-                            ? 'Use this when a relative, friend, spouse, or another person paid for the customer.'
-                            : 'Use this when an agent helped the customer complete the payment.'}
-                      </p>
-                    </button>
-                  )
-                )}
-              </div>
-
-              {payerType !== 'CUSTOMER_SELF' && (
-                <div className="mt-4">
-                  <label className="text-sm font-bold text-slate-700">
-                    Relationship to Customer
-                  </label>
+                <label className="block">
+                  <span className="text-sm font-black text-slate-700">
+                    Relationship <span className="text-red-500">*</span>
+                  </span>
                   <select
                     value={payerRelationship}
-                    onChange={(event) => setPayerRelationship(event.target.value)}
-                    className="mt-2 h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                    onChange={(event) =>
+                      setPayerRelationship(event.target.value)
+                    }
+                    className="mt-2 min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-semibold text-slate-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                   >
-                    {relationshipOptions.map((item) => (
-                      <option key={item.value} value={item.value}>
-                        {item.label}
+                    {relationshipOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
                       </option>
                     ))}
                   </select>
-                </div>
-              )}
-            </section>
+                </label>
 
-            <section className="mt-4 rounded-3xl border border-slate-100 bg-slate-50 p-4 sm:p-5">
-              <div className="flex items-start gap-3">
-                <div className="rounded-2xl bg-white p-3 text-emerald-700 shadow-sm">
-                  <ShieldCheck className="h-6 w-6" />
-                </div>
-
-                <div>
-                  <h3 className="text-base font-black text-slate-950">
-                    Submit Transaction Details
-                  </h3>
-                  <p className="mt-1 text-sm leading-6 text-slate-500">
-                    Enter the sender details exactly as they appear on the MoMo
-                    transaction message or merchant statement.
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-5 grid gap-4 md:grid-cols-2">
-                <InputField
+                <TextInput
                   label="Sender Name"
+                  required
                   value={senderName}
                   onChange={setSenderName}
-                  placeholder="Name used to send the MoMo"
+                  placeholder="Name on MoMo transaction"
                 />
 
-                <InputField
+                <TextInput
                   label="Sender Phone"
+                  required
                   value={senderPhone}
                   onChange={setSenderPhone}
-                  placeholder="Phone number used for payment"
+                  placeholder="Phone number used to pay"
                   inputMode="tel"
                 />
 
-                <div>
-                  <label className="text-sm font-bold text-slate-700">
-                    Sender Network
-                  </label>
+                <label className="block">
+                  <span className="text-sm font-black text-slate-700">
+                    Sender Network <span className="text-red-500">*</span>
+                  </span>
                   <select
                     value={senderNetwork}
                     onChange={(event) => setSenderNetwork(event.target.value)}
-                    className="mt-2 h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                    className="mt-2 min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-semibold text-slate-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                   >
-                    {getSenderNetworkOptions().map((item) => (
-                      <option key={item.value} value={item.value}>
-                        {item.label}
+                    {getSenderNetworkOptions().map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
                       </option>
                     ))}
                   </select>
-                </div>
+                </label>
 
-                <InputField
-                  label="Total Amount Paid"
-                  value={totalAmountPaid}
-                  onChange={setTotalAmountPaid}
-                  placeholder="Example: 103"
-                  type="number"
-                  inputMode="decimal"
+                <TextInput
+                  label="Transaction Reference"
+                  required
+                  value={transactionReference}
+                  onChange={setTransactionReference}
+                  placeholder="Example: 1234567890"
+                />
+              </div>
+            </section>
+
+            <section className="rounded-3xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+              <SectionHeader
+                icon={<ClipboardCheck className="h-5 w-5" />}
+                title="Actual Payment Date & Time"
+                description="Use the real date and time on the MoMo transaction."
+                warm
+              />
+
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <label className="block">
+                  <span className="text-sm font-black text-slate-700">
+                    Payment Date <span className="text-red-500">*</span>
+                  </span>
+                  <input
+                    type="date"
+                    value={actualPaymentDate}
+                    max={getTodayDateValue()}
+                    onChange={(event) =>
+                      setActualPaymentDate(event.target.value)
+                    }
+                    className="mt-2 min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="text-sm font-black text-slate-700">
+                    Payment Time <span className="text-red-500">*</span>
+                  </span>
+                  <input
+                    type="time"
+                    value={actualPaymentTime}
+                    onChange={(event) =>
+                      setActualPaymentTime(event.target.value)
+                    }
+                    className="mt-2 min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  />
+                </label>
+              </div>
+
+              <p className="mt-3 rounded-2xl bg-white/70 p-3 text-xs font-bold leading-5 text-amber-900">
+                This helps TrustPoint decide if the payment was on time or late.
+                Do not use the time you are submitting this form unless that is
+                when you actually paid.
+              </p>
+            </section>
+
+            <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+              <SectionHeader
+                icon={<Info className="h-5 w-5" />}
+                title="Optional Information"
+                description="Add screenshot link or note only if needed."
+              />
+
+              <div className="mt-4 space-y-4">
+                <TextInput
+                  label="Screenshot URL"
+                  value={screenshotUrl}
+                  onChange={setScreenshotUrl}
+                  placeholder="Optional screenshot link"
                 />
 
-                <div className="md:col-span-2">
-                  <InputField
-                    label="Transaction Reference"
-                    value={transactionReference}
-                    onChange={setTransactionReference}
-                    placeholder="Enter MoMo transaction ID/reference"
-                  />
-                </div>
-
-                <div className="md:col-span-2">
-                  <label className="text-sm font-bold text-slate-700">
+                <label className="block">
+                  <span className="text-sm font-black text-slate-700">
                     Payment Note
-                  </label>
+                  </span>
                   <textarea
                     value={paymentNote}
                     onChange={(event) => setPaymentNote(event.target.value)}
                     rows={3}
-                    placeholder={
-                      payerType === 'THIRD_PARTY'
-                        ? 'Example: Customer used brother’s MoMo number to pay.'
-                        : 'Optional note for admin verification'
-                    }
-                    className="mt-2 w-full resize-none rounded-2xl border border-slate-200 bg-white p-4 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                    placeholder="Optional note for admin"
+                    className="mt-2 w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-800 outline-none focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
                   />
-                </div>
+                </label>
               </div>
             </section>
           </div>
+        </div>
 
-          <div className="shrink-0 border-t border-slate-100 bg-white px-4 py-4 shadow-[0_-10px_30px_rgba(15,23,42,0.08)] sm:px-6">
-            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-center text-xs leading-5 text-slate-500 sm:max-w-md sm:text-left">
-                Check the amount, sender details, and reference carefully before
-                submitting.
+        <div className="shrink-0 border-t border-slate-100 bg-white px-5 py-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                Total Amount
               </p>
+              <p className="text-2xl font-black text-emerald-700">
+                {formatCurrency(totalAmount)}
+              </p>
+              <p className="text-xs font-semibold text-slate-500">
+                Customer: {customerName || 'Customer'}
+              </p>
+            </div>
 
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  disabled={submitting}
-                  className="inline-flex min-h-12 items-center justify-center rounded-2xl border border-slate-200 bg-white px-5 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  Cancel
-                </button>
+            <div className="grid gap-2 sm:min-w-56">
+              <button
+                type="button"
+                onClick={handleSubmit}
+                disabled={submitting}
+                className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-black text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {submitting ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="h-5 w-5" />
+                )}
+                {submitting ? 'Submitting...' : 'Submit for Review'}
+              </button>
 
-                <button
-                  type="button"
-                  onClick={handleSubmit}
-                  disabled={submitting || loadingAccount || !companyAccount}
-                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                >
-                  {submitting ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Submitting...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="h-4 w-4" />
-                      Confirm & Submit
-                    </>
-                  )}
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={submitting}
+                className="inline-flex min-h-11 w-full items-center justify-center rounded-2xl border border-slate-200 bg-white px-5 text-sm font-black text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Cancel
+              </button>
             </div>
           </div>
         </div>
@@ -739,85 +786,187 @@ export function ManualMerchantPaymentModal({
   );
 }
 
-function DetailBox({ label, value }: { label: string; value: string }) {
+function MessageBox({
+  type,
+  message,
+}: {
+  type: 'success' | 'error';
+  message: string;
+}) {
+  const isSuccess = type === 'success';
+
   return (
-    <div className="rounded-2xl border border-emerald-100 bg-white p-4">
+    <div
+      className={`rounded-2xl border p-4 ${
+        isSuccess
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          : 'border-red-200 bg-red-50 text-red-700'
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        {isSuccess ? (
+          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
+        ) : (
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+        )}
+        <p className="text-sm font-bold leading-6">{message}</p>
+      </div>
+    </div>
+  );
+}
+
+function SectionHeader({
+  icon,
+  title,
+  description,
+  warm,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  warm?: boolean;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <div
+        className={`rounded-2xl p-3 ${
+          warm ? 'bg-white text-amber-700' : 'bg-emerald-50 text-emerald-700'
+        }`}
+      >
+        {icon}
+      </div>
+
+      <div>
+        <h3
+          className={
+            warm ? 'font-black text-amber-950' : 'font-black text-slate-900'
+          }
+        >
+          {title}
+        </h3>
+        <p
+          className={
+            warm
+              ? 'mt-1 text-sm leading-6 text-amber-800'
+              : 'mt-1 text-sm leading-6 text-slate-500'
+          }
+        >
+          {description}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function AmountBox({
+  label,
+  value,
+  strong,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+}) {
+  return (
+    <div className="rounded-2xl bg-white p-4">
       <p className="text-xs font-black uppercase tracking-wide text-slate-400">
         {label}
       </p>
-      <p className="mt-1 break-words text-base font-black text-slate-950">
+      <p
+        className={`mt-1 ${
+          strong
+            ? 'text-xl font-black text-emerald-700'
+            : 'text-sm font-black text-slate-900'
+        }`}
+      >
         {value}
       </p>
     </div>
   );
 }
 
-function CopyBox({
-  label,
-  value,
-  onCopy,
-}: {
-  label: string;
-  value: string;
-  onCopy: () => void;
-}) {
-  return (
-    <div className="rounded-2xl border border-emerald-100 bg-white p-4">
-      <p className="text-xs font-black uppercase tracking-wide text-slate-400">
-        {label}
-      </p>
-
-      <div className="mt-2 flex items-center justify-between gap-3">
-        <p className="break-all text-base font-black text-slate-950">{value}</p>
-
-        <button
-          type="button"
-          onClick={onCopy}
-          className="inline-flex min-h-9 shrink-0 items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-600 transition hover:bg-slate-50"
-        >
-          <Copy className="h-3.5 w-3.5" />
-          Copy
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function BreakdownRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-4 rounded-2xl bg-slate-50 p-4">
-      <p className="text-sm font-semibold text-slate-500">{label}</p>
-      <p className="text-right text-sm font-black text-slate-950">{value}</p>
-    </div>
-  );
-}
-
-function InputField({
+function TextInput({
   label,
   value,
   onChange,
   placeholder,
-  type = 'text',
+  required,
   inputMode,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
-  type?: string;
-  inputMode?: 'text' | 'tel' | 'decimal' | 'numeric' | 'email' | 'search' | 'url';
+  required?: boolean;
+  inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode'];
 }) {
   return (
-    <div>
-      <label className="text-sm font-bold text-slate-700">{label}</label>
+    <label className="block">
+      <span className="text-sm font-black text-slate-700">
+        {label}
+        {required && <span className="text-red-500"> *</span>}
+      </span>
+
       <input
-        type={type}
-        inputMode={inputMode}
         value={value}
+        inputMode={inputMode}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="mt-2 h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+        className="mt-2 min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-semibold text-slate-800 outline-none focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
       />
+    </label>
+  );
+}
+
+function CopyBox({
+  label,
+  value,
+  copiedValue,
+  onCopy,
+  highlight,
+}: {
+  label: string;
+  value: string;
+  copiedValue: string;
+  onCopy: (value: string, label: string) => Promise<void>;
+  highlight?: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-2xl border p-4 ${
+        highlight
+          ? 'border-emerald-200 bg-emerald-50'
+          : 'border-slate-100 bg-slate-50'
+      }`}
+    >
+      <p className="text-xs font-black uppercase tracking-wide text-slate-400">
+        {label}
+      </p>
+
+      <div className="mt-2 flex items-center justify-between gap-3">
+        <p
+          className={`break-all text-sm font-black ${
+            highlight ? 'text-emerald-800' : 'text-slate-900'
+          }`}
+        >
+          {value}
+        </p>
+
+        <button
+          type="button"
+          onClick={() => onCopy(value, label)}
+          className="shrink-0 rounded-xl bg-white p-2 text-slate-600 ring-1 ring-slate-200 transition hover:bg-emerald-100 hover:text-emerald-700"
+        >
+          {copiedValue === label ? (
+            <CheckCircle2 className="h-4 w-4" />
+          ) : (
+            <Copy className="h-4 w-4" />
+          )}
+        </button>
+      </div>
     </div>
   );
 }
+
+export { ManualMerchantPaymentModal };
+export default ManualMerchantPaymentModal;

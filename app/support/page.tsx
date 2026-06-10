@@ -1,240 +1,500 @@
 import Link from 'next/link';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Wallet, Phone, Mail, Clock, MessageCircle } from 'lucide-react';
+import {
+  ArrowRight,
+  Bell,
+  CheckCircle2,
+  Clock,
+  FileQuestion,
+  HandCoins,
+  HelpCircle,
+  Home,
+  Mail,
+  MessageCircle,
+  Phone,
+  ShieldCheck,
+  Smartphone,
+  UserRound,
+  Users,
+  Wallet,
+} from 'lucide-react';
+
+const supportCards = [
+  {
+    title: 'Phone Support',
+    description: 'Call us directly when you need quick assistance.',
+    value: '054-222-4630',
+    href: 'tel:0542224630',
+    action: 'Call Support',
+    icon: <Phone className="h-6 w-6" />,
+    tone: 'emerald',
+  },
+  {
+    title: 'WhatsApp Support',
+    description: 'Chat with our support team on WhatsApp for faster response.',
+    value: '054-222-4630',
+    href: 'https://wa.me/233542224630',
+    action: 'Chat on WhatsApp',
+    icon: <MessageCircle className="h-6 w-6" />,
+    tone: 'green',
+  },
+  {
+    title: 'Email Support',
+    description: 'Send us a detailed message and we will respond as soon as possible.',
+    value: 'support@trustpointgh.com',
+    href: 'mailto:support@trustpointgh.com',
+    action: 'Send Email',
+    icon: <Mail className="h-6 w-6" />,
+    tone: 'blue',
+  },
+  {
+    title: 'Support Hours',
+    description: 'Our support team is available during working hours.',
+    value: 'Mon - Sat, 8:00 AM - 6:00 PM',
+    href: '#support-hours',
+    action: 'View Hours',
+    icon: <Clock className="h-6 w-6" />,
+    tone: 'amber',
+  },
+];
+
+const quickLinks = [
+  {
+    title: 'Customer Dashboard',
+    description: 'Go back to your Fund Space dashboard.',
+    href: '/dashboard',
+    icon: <UserRound className="h-5 w-5" />,
+  },
+  {
+    title: 'Agent Dashboard',
+    description: 'Open your agent control center.',
+    href: '/agent',
+    icon: <Users className="h-5 w-5" />,
+  },
+  {
+    title: 'Admin Control Center',
+    description: 'Return to the admin dashboard.',
+    href: '/admin',
+    icon: <ShieldCheck className="h-5 w-5" />,
+  },
+  {
+    title: 'Admin Complaints',
+    description: 'Admins can manage Fund Space complaints here.',
+    href: '/admin/fund-space/disputes',
+    icon: <Bell className="h-5 w-5" />,
+  },
+];
+
+const issueLinks = [
+  {
+    title: 'MoMo Payment Issue',
+    description:
+      'Use this when your MoMo payment has been submitted but is not showing as paid.',
+    href: '/dashboard/fund-space/disputes',
+    icon: <Smartphone className="h-5 w-5" />,
+  },
+  {
+    title: 'Payout Issue',
+    description:
+      'Use this when your payout is delayed, wrong, rejected, or not received.',
+    href: '/dashboard/fund-space/disputes',
+    icon: <HandCoins className="h-5 w-5" />,
+  },
+  {
+    title: 'Verification Issue',
+    description:
+      'Use this when your ID, profile, or account verification needs attention.',
+    href: '/dashboard/verification',
+    icon: <ShieldCheck className="h-5 w-5" />,
+  },
+  {
+    title: 'Agent Customer Support',
+    description:
+      'Agents can support customers and raise Fund Space complaints from here.',
+    href: '/agent/fund-space/disputes',
+    icon: <Users className="h-5 w-5" />,
+  },
+];
+
+const faqs = [
+  {
+    question: 'How do I submit my weekly Fund Space payment?',
+    answer:
+      'Open your Fund Space page, choose the active round, submit your MoMo payment details, and wait for admin review. Once approved, your contribution will show as paid.',
+  },
+  {
+    question: 'Why is my MoMo payment still pending?',
+    answer:
+      'MoMo payments must be reviewed by admin before they are marked as paid. Make sure your reference, sender name, sender phone, and amount are correct.',
+  },
+  {
+    question: 'What should I do if my MoMo payment was rejected?',
+    answer:
+      'Check the rejection reason, correct the issue, and submit the right payment details again. You may also raise a complaint from your Fund Space page.',
+  },
+  {
+    question: 'How do I report a payout problem?',
+    answer:
+      'Go to your Fund Space dispute page and submit a complaint with the payout details. Add screenshots or payment evidence where possible.',
+  },
+  {
+    question: 'Can an agent help me with my Fund Space payment?',
+    answer:
+      'Yes. If you were registered by an agent, the agent can help you submit your MoMo payment record and follow up on your Fund Space status.',
+  },
+  {
+    question: 'Where should admins handle complaints?',
+    answer:
+      'Admins should use the Admin Complaints page under Fund Space management. This public support page is mainly for guidance and contact information.',
+  },
+];
+
+function getToneClass(tone: string) {
+  if (tone === 'green') return 'bg-green-50 text-green-700';
+  if (tone === 'blue') return 'bg-blue-50 text-blue-700';
+  if (tone === 'amber') return 'bg-amber-50 text-amber-700';
+
+  return 'bg-emerald-50 text-emerald-700';
+}
+
+function SupportCard({
+  title,
+  description,
+  value,
+  href,
+  action,
+  icon,
+  tone,
+}: {
+  title: string;
+  description: string;
+  value: string;
+  href: string;
+  action: string;
+  icon: React.ReactNode;
+  tone: string;
+}) {
+  return (
+    <a
+      href={href}
+      target={href.startsWith('http') ? '_blank' : undefined}
+      rel={href.startsWith('http') ? 'noopener noreferrer' : undefined}
+      className="group block min-w-0 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-md"
+    >
+      <div className={`mb-4 flex h-12 w-12 items-center justify-center rounded-2xl ${getToneClass(tone)}`}>
+        {icon}
+      </div>
+
+      <h2 className="text-lg font-black text-slate-900">{title}</h2>
+
+      <p className="mt-2 min-w-0 break-words text-sm font-semibold leading-6 text-slate-500">
+        {description}
+      </p>
+
+      <p className="mt-4 min-w-0 break-words text-base font-black text-slate-900 [overflow-wrap:anywhere]">
+        {value}
+      </p>
+
+      <p className="mt-4 inline-flex items-center gap-2 text-sm font-black text-emerald-700">
+        {action}
+        <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
+      </p>
+    </a>
+  );
+}
+
+function LinkCard({
+  title,
+  description,
+  href,
+  icon,
+}: {
+  title: string;
+  description: string;
+  href: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      className="group flex min-w-0 items-start gap-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-md"
+    >
+      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
+        {icon}
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <h3 className="break-words text-base font-black text-slate-900">
+          {title}
+        </h3>
+
+        <p className="mt-1 break-words text-sm font-semibold leading-6 text-slate-500">
+          {description}
+        </p>
+      </div>
+
+      <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-slate-400 transition group-hover:translate-x-1 group-hover:text-emerald-700" />
+    </Link>
+  );
+}
 
 export default function SupportPage() {
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
-      <header className="border-b bg-white/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <Wallet className="h-8 w-8 text-blue-600" />
-            <span className="text-xl font-bold text-slate-900">TrustPoint</span>
+    <main className="min-h-screen bg-slate-50">
+      <header className="sticky top-0 z-50 border-b border-slate-200 bg-white/90 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 md:px-8">
+          <Link href="/" className="flex min-w-0 items-center gap-2">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-700 text-white">
+              <Wallet className="h-5 w-5" />
+            </div>
+
+            <div className="min-w-0">
+              <p className="truncate text-lg font-black text-slate-900">
+                TrustPoint
+              </p>
+              <p className="truncate text-xs font-bold text-slate-500">
+                Fund Space Support
+              </p>
+            </div>
           </Link>
-          <nav className="flex items-center gap-4">
-            <Link href="/auth/login">
-              <Button variant="ghost">Login</Button>
+
+          <nav className="flex items-center gap-2">
+            <Link
+              href="/"
+              className="hidden min-h-10 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 hover:bg-slate-50 sm:inline-flex"
+            >
+              <Home className="h-4 w-4" />
+              Home
             </Link>
-            <Link href="/auth/signup">
-              <Button>Sign Up</Button>
+
+            <Link
+              href="/auth/login"
+              className="inline-flex min-h-10 items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 hover:bg-slate-50"
+            >
+              Login
+            </Link>
+
+            <Link
+              href="/auth/signup"
+              className="inline-flex min-h-10 items-center justify-center rounded-2xl bg-emerald-700 px-4 text-sm font-black text-white hover:bg-emerald-800"
+            >
+              Sign Up
             </Link>
           </nav>
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-12">
-        <div className="max-w-4xl mx-auto">
-          <div className="text-center mb-12">
-            <h1 className="text-4xl md:text-5xl font-bold text-slate-900 mb-4">
-              Help & Support
-            </h1>
-            <p className="text-lg text-slate-600">
-              We're here to help you save better. Get in touch with us anytime.
-            </p>
-          </div>
+      <section className="px-4 py-8 md:px-8 md:py-12">
+        <div className="mx-auto max-w-7xl">
+          <div className="overflow-hidden rounded-[2rem] bg-gradient-to-br from-emerald-950 via-emerald-900 to-emerald-800 text-white shadow-sm">
+            <div className="p-6 md:p-10">
+              <div className="max-w-4xl">
+                <p className="inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-2 text-xs font-black">
+                  <HelpCircle className="h-4 w-4" />
+                  Help & Support Center
+                </p>
 
-          <div className="grid md:grid-cols-2 gap-6 mb-12">
-            <Card className="border-none shadow-lg">
-              <CardHeader>
-                <div className="h-12 w-12 bg-blue-100 rounded-lg flex items-center justify-center mb-2">
-                  <Phone className="h-6 w-6 text-blue-600" />
+                <h1 className="mt-5 break-words text-4xl font-black tracking-tight md:text-6xl">
+                  How can we help you today?
+                </h1>
+
+                <p className="mt-5 max-w-3xl break-words text-sm font-semibold leading-7 text-emerald-50 md:text-base">
+                  Get help with MoMo payments, Fund Space contributions, payout
+                  questions, verification issues, account access, agent support,
+                  and general TrustPoint questions.
+                </p>
+
+                <div className="mt-7 flex flex-wrap gap-3">
+                  <a
+                    href="https://wa.me/233542224630"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-white px-5 text-sm font-black text-emerald-900 hover:bg-emerald-50"
+                  >
+                    <MessageCircle className="h-4 w-4" />
+                    Chat on WhatsApp
+                  </a>
+
+                  <Link
+                    href="/dashboard/fund-space/disputes"
+                    className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-white/25 bg-white/10 px-5 text-sm font-black text-white hover:bg-white/20"
+                  >
+                    Raise a Complaint
+                    <ArrowRight className="h-4 w-4" />
+                  </Link>
+
+                  <Link
+                    href="/admin"
+                    className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-white/25 bg-white/10 px-5 text-sm font-black text-white hover:bg-white/20"
+                  >
+                    Admin Area
+                    <ArrowRight className="h-4 w-4" />
+                  </Link>
                 </div>
-                <CardTitle>Phone Support</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-slate-600 mb-4">
-                  Call us directly for immediate assistance
-                </p>
-                <a href="tel:0542554675" className="text-lg font-semibold text-blue-600 hover:text-blue-700">
-                  0542554675
-                </a>
-              </CardContent>
-            </Card>
-
-            <Card className="border-none shadow-lg">
-              <CardHeader>
-                <div className="h-12 w-12 bg-green-100 rounded-lg flex items-center justify-center mb-2">
-                  <MessageCircle className="h-6 w-6 text-green-600" />
-                </div>
-                <CardTitle>WhatsApp</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-slate-600 mb-4">
-                  Chat with us on WhatsApp for quick support
-                </p>
-                <a
-                  href="https://wa.me/233542554675"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-lg font-semibold text-green-600 hover:text-green-700"
-                >
-                  Chat on WhatsApp
-                </a>
-              </CardContent>
-            </Card>
-
-            <Card className="border-none shadow-lg">
-              <CardHeader>
-                <div className="h-12 w-12 bg-purple-100 rounded-lg flex items-center justify-center mb-2">
-                  <Mail className="h-6 w-6 text-purple-600" />
-                </div>
-                <CardTitle>Email Support</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-slate-600 mb-4">
-                  Send us an email and we'll respond within 24 hours
-                </p>
-                <a
-                  href="mailto:support@trustpointgh.com"
-                  className="text-lg font-semibold text-purple-600 hover:text-purple-700 break-all"
-                >
-                  support@trustpointgh.com
-                </a>
-              </CardContent>
-            </Card>
-
-            <Card className="border-none shadow-lg">
-              <CardHeader>
-                <div className="h-12 w-12 bg-orange-100 rounded-lg flex items-center justify-center mb-2">
-                  <Clock className="h-6 w-6 text-orange-600" />
-                </div>
-                <CardTitle>Support Hours</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-slate-600 mb-4">
-                  Our team is available during these hours
-                </p>
-                <p className="text-lg font-semibold text-slate-900">
-                  Monday - Saturday
-                </p>
-                <p className="text-lg font-semibold text-slate-900">
-                  8:00 AM - 6:00 PM
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-
-          <Card className="border-none shadow-lg">
-            <CardHeader>
-              <CardTitle className="text-2xl">Frequently Asked Questions</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div>
-                <h3 className="font-semibold text-lg text-slate-900 mb-2">
-                  How do I create an account?
-                </h3>
-                <p className="text-slate-600 leading-relaxed">
-                  Click on "Sign Up" and follow the simple registration process. You'll need your phone number
-                  to receive an OTP code for verification.
-                </p>
               </div>
-
-              <div>
-                <h3 className="font-semibold text-lg text-slate-900 mb-2">
-                  How do I make a deposit?
-                </h3>
-                <p className="text-slate-600 leading-relaxed">
-                  You can make deposits by visiting any of our trusted agents with cash, or record your own
-                  deposits through mobile money transfers. All deposits are tracked in your wallet in real-time.
-                </p>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-lg text-slate-900 mb-2">
-                  How do withdrawals work?
-                </h3>
-                <p className="text-slate-600 leading-relaxed">
-                  Submit a withdrawal request from your dashboard. Our team will review and approve it within
-                  24 hours. Once approved, funds will be sent to your mobile money account. A small fee applies.
-                </p>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-lg text-slate-900 mb-2">
-                  What are group savings (susu)?
-                </h3>
-                <p className="text-slate-600 leading-relaxed">
-                  Group savings allow you to create or join savings groups where members contribute fixed amounts
-                  regularly (daily, weekly, or monthly). It's a traditional way to save together with accountability.
-                </p>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-lg text-slate-900 mb-2">
-                  Is my money safe with TrustPoint?
-                </h3>
-                <p className="text-slate-600 leading-relaxed">
-                  Yes! We use bank-level security with encrypted data storage, audit trails for all transactions,
-                  and role-based access controls. Your money and information are protected at all times.
-                </p>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-lg text-slate-900 mb-2">
-                  What is locked savings?
-                </h3>
-                <p className="text-slate-600 leading-relaxed">
-                  Locked savings is a savings plan where you set an unlock date. Your savings in this plan cannot
-                  be withdrawn until the unlock date, helping you achieve long-term financial goals.
-                </p>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-lg text-slate-900 mb-2">
-                  How much are the withdrawal fees?
-                </h3>
-                <p className="text-slate-600 leading-relaxed">
-                  We charge a small 1% fee on withdrawals to cover processing and mobile money transfer costs.
-                  The fee is clearly shown before you confirm any withdrawal request.
-                </p>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-lg text-slate-900 mb-2">
-                  Can I have multiple savings plans?
-                </h3>
-                <p className="text-slate-600 leading-relaxed">
-                  Yes! You can create multiple savings plans for different purposes - personal savings, business
-                  savings, or locked savings with different goals and timelines.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-
-          <div className="mt-12 text-center">
-            <p className="text-slate-600 mb-6">
-              Still have questions? We're here to help!
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <a href="tel:0542554675">
-                <Button size="lg" className="w-full sm:w-auto">
-                  <Phone className="mr-2 h-5 w-5" />
-                  Call Us Now
-                </Button>
-              </a>
-              <a href="https://wa.me/233542554675" target="_blank" rel="noopener noreferrer">
-                <Button size="lg" variant="outline" className="w-full sm:w-auto">
-                  <MessageCircle className="mr-2 h-5 w-5" />
-                  WhatsApp Chat
-                </Button>
-              </a>
             </div>
           </div>
-        </div>
-      </main>
 
-      <footer className="bg-slate-900 text-slate-300 py-12 mt-16">
-        <div className="container mx-auto px-4 text-center">
-          <div className="flex items-center justify-center gap-2 mb-4">
-            <Wallet className="h-6 w-6 text-blue-400" />
-            <span className="text-lg font-bold text-white">TrustPoint</span>
-          </div>
-          <p className="text-sm">
-            &copy; {new Date().getFullYear()} TrustPoint Ghana. All rights reserved.
-          </p>
+          <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {supportCards.map((card) => (
+              <SupportCard key={card.title} {...card} />
+            ))}
+          </section>
+
+          <section className="mt-8 grid gap-6 xl:grid-cols-[1fr_420px]">
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+              <div className="mb-5">
+                <p className="text-xs font-black uppercase tracking-wide text-emerald-700">
+                  Get the right support faster
+                </p>
+
+                <h2 className="mt-2 text-2xl font-black text-slate-900">
+                  Choose the issue you need help with
+                </h2>
+
+                <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+                  Select the best option below so your issue goes to the right
+                  place. Payment and payout issues should be reported through the
+                  Fund Space complaint system.
+                </p>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                {issueLinks.map((item) => (
+                  <LinkCard key={item.title} {...item} />
+                ))}
+              </div>
+            </div>
+
+            <aside className="space-y-5">
+              <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5">
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="mt-1 h-5 w-5 shrink-0 text-emerald-700" />
+
+                  <div>
+                    <h2 className="text-lg font-black text-emerald-950">
+                      Before contacting support
+                    </h2>
+
+                    <div className="mt-3 space-y-3 text-sm font-semibold leading-6 text-emerald-800">
+                      <p>1. Check that your MoMo reference is correct.</p>
+                      <p>2. Confirm the sender phone number and network.</p>
+                      <p>3. Keep a screenshot of your payment message.</p>
+                      <p>4. Check your Fund Space contribution status.</p>
+                      <p>5. Use the complaint page for payment or payout issues.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                id="support-hours"
+                className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"
+              >
+                <div className="flex items-start gap-3">
+                  <Clock className="mt-1 h-5 w-5 shrink-0 text-amber-600" />
+
+                  <div>
+                    <h2 className="text-lg font-black text-slate-900">
+                      Support Hours
+                    </h2>
+
+                    <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+                      Monday - Saturday
+                    </p>
+
+                    <p className="mt-1 text-xl font-black text-slate-900">
+                      8:00 AM - 6:00 PM
+                    </p>
+
+                    <p className="mt-3 text-sm leading-6 text-slate-500">
+                      Urgent Fund Space payment or payout issues should be
+                      reported through the complaint system first, then followed
+                      up by phone or WhatsApp.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </aside>
+          </section>
+
+          <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+            <div className="mb-5">
+              <p className="text-xs font-black uppercase tracking-wide text-emerald-700">
+                Navigation
+              </p>
+
+              <h2 className="mt-2 text-2xl font-black text-slate-900">
+                Quick links for customers, agents, and admins
+              </h2>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              {quickLinks.map((item) => (
+                <LinkCard key={item.title} {...item} />
+              ))}
+            </div>
+          </section>
+
+          <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+            <div className="mb-6">
+              <p className="text-xs font-black uppercase tracking-wide text-emerald-700">
+                Frequently Asked Questions
+              </p>
+
+              <h2 className="mt-2 text-2xl font-black text-slate-900">
+                Answers to common questions
+              </h2>
+
+              <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+                These answers help customers and agents understand what to do
+                before contacting support.
+              </p>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              {faqs.map((faq) => (
+                <div
+                  key={faq.question}
+                  className="rounded-3xl border border-slate-100 bg-slate-50 p-5"
+                >
+                  <div className="flex items-start gap-3">
+                    <FileQuestion className="mt-1 h-5 w-5 shrink-0 text-emerald-700" />
+
+                    <div>
+                      <h3 className="break-words text-base font-black text-slate-900">
+                        {faq.question}
+                      </h3>
+
+                      <p className="mt-2 break-words text-sm font-semibold leading-6 text-slate-500">
+                        {faq.answer}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="mt-8 rounded-3xl border border-amber-200 bg-amber-50 p-5 md:p-6">
+            <div className="flex items-start gap-3">
+              <ShieldCheck className="mt-1 h-5 w-5 shrink-0 text-amber-700" />
+
+              <div>
+                <h2 className="text-lg font-black text-amber-950">
+                  Important security reminder
+                </h2>
+
+                <p className="mt-2 break-words text-sm font-semibold leading-6 text-amber-800">
+                  TrustPoint will never ask you to share your password. For MoMo
+                  payments, always keep your transaction reference and payment
+                  screenshot. Only submit payment details through the official
+                  Fund Space payment page or through your registered agent.
+                </p>
+              </div>
+            </div>
+          </section>
         </div>
-      </footer>
-    </div>
+      </section>
+    </main>
   );
 }

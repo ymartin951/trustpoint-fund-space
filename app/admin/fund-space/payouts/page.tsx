@@ -1,49 +1,72 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   AlertCircle,
-  AlertTriangle,
+  ArrowLeft,
   ArrowRight,
   BadgeCheck,
-  Banknote,
-  CalendarClock,
   CheckCircle2,
-  CircleDollarSign,
   Clock,
   Eye,
   HandCoins,
   Loader2,
-  Phone,
   RefreshCw,
   Search,
-  ShieldCheck,
-  Smartphone,
   UserRound,
-  Users,
-  WalletCards,
+  Wallet,
   X,
   XCircle,
 } from 'lucide-react';
 
-import PayoutRiskCard from '@/components/fund-space/PayoutRiskCard';
-import TrustShieldCard from '@/components/trust-shield/TrustShieldCard';
 import { supabase } from '@/lib/supabase/client';
 
-type PayoutStatus =
-  | 'PENDING'
+type PayoutStatusFilter =
+  | 'ALL'
   | 'PENDING_ADMIN_APPROVAL'
-  | 'READY_FOR_ADMIN_APPROVAL'
-  | 'READY_FOR_PAYOUT'
   | 'APPROVED'
   | 'APPROVED_FOR_PAYOUT'
   | 'PAID'
   | 'REJECTED'
   | 'FAILED'
-  | 'CANCELLED'
-  | string;
+  | 'CANCELLED';
+
+type ActionType = 'APPROVE' | 'REJECT' | 'MARK_PAID' | null;
+
+type ProfileLite = {
+  id: string;
+  full_name: string | null;
+  phone: string | null;
+  email?: string | null;
+  momo_number?: string | null;
+  bank_name?: string | null;
+  bank_account_number?: string | null;
+  bank_account_name?: string | null;
+  registered_by_agent?: string | null;
+  verification_status?: string | null;
+  status?: string | null;
+};
+
+type FundSpaceLite = {
+  id: string;
+  name: string | null;
+  contribution_amount: number | string | null;
+  status: string | null;
+  current_round_number?: number | null;
+};
+
+type RoundLite = {
+  id: string;
+  fund_space_id: string;
+  round_number: number | null;
+  contribution_deadline: string | null;
+  week_start_date?: string | null;
+  week_end_date?: string | null;
+  status: string | null;
+};
 
 type Payout = {
   id: string;
@@ -51,11 +74,11 @@ type Payout = {
   round_id: string;
   user_id?: string | null;
   recipient_user_id?: string | null;
-  amount?: number | null;
-  gross_amount?: number | null;
-  net_amount?: number | null;
-  platform_fee?: number | null;
-  status: PayoutStatus;
+  amount?: number | string | null;
+  gross_amount?: number | string | null;
+  net_amount?: number | string | null;
+  platform_fee?: number | string | null;
+  status: string | null;
   payout_method?: string | null;
   payout_reference?: string | null;
   approved_at: string | null;
@@ -66,72 +89,97 @@ type Payout = {
   failure_reason?: string | null;
   created_at: string | null;
   updated_at?: string | null;
+
+  fund_space?: FundSpaceLite | null;
+  round?: RoundLite | null;
+  profile?: ProfileLite | null;
+  recipient?: ProfileLite | null;
 };
 
-type FundSpace = {
-  id: string;
-  name: string | null;
-  contribution_amount: number | null;
-  status: string | null;
-  current_round_number?: number | null;
+type PayoutStats = {
+  total: number;
+  pendingApproval: number;
+  approved: number;
+  paid: number;
+  rejected: number;
+  failed: number;
+  cancelled: number;
+  totalValue: number;
+  pendingValue: number;
+  paidValue: number;
 };
 
-type Round = {
-  id: string;
-  fund_space_id?: string | null;
-  round_number: number;
-  due_date?: string | null;
-  contribution_deadline?: string | null;
-  week_start_date?: string | null;
-  week_end_date?: string | null;
-  status: string | null;
+type SummaryItemData = {
+  label: string;
+  value: string | number;
+  helper?: string;
+  href: string;
+  status: PayoutStatusFilter;
 };
 
-type Profile = {
-  id: string;
-  full_name: string | null;
-  phone: string | null;
-  email: string | null;
-  momo_number?: string | null;
-  bank_name?: string | null;
-  bank_account_number?: string | null;
-  bank_account_name?: string | null;
-  registered_by_agent?: string | null;
-  verification_status?: string | null;
-  status?: string | null;
+const defaultStats: PayoutStats = {
+  total: 0,
+  pendingApproval: 0,
+  approved: 0,
+  paid: 0,
+  rejected: 0,
+  failed: 0,
+  cancelled: 0,
+  totalValue: 0,
+  pendingValue: 0,
+  paidValue: 0,
 };
 
-type AgentProfile = {
-  id: string;
-  full_name: string | null;
-  phone: string | null;
-  email: string | null;
-};
+const statusTabs: { label: string; value: PayoutStatusFilter; href: string }[] = [
+  { label: 'All', value: 'ALL', href: '/admin/fund-space/payouts' },
+  {
+    label: 'Pending',
+    value: 'PENDING_ADMIN_APPROVAL',
+    href: '/admin/fund-space/payouts?status=PENDING_ADMIN_APPROVAL',
+  },
+  {
+    label: 'Approved',
+    value: 'APPROVED',
+    href: '/admin/fund-space/payouts?status=APPROVED',
+  },
+  { label: 'Paid', value: 'PAID', href: '/admin/fund-space/payouts?status=PAID' },
+  {
+    label: 'Rejected',
+    value: 'REJECTED',
+    href: '/admin/fund-space/payouts?status=REJECTED',
+  },
+  {
+    label: 'Failed',
+    value: 'FAILED',
+    href: '/admin/fund-space/payouts?status=FAILED',
+  },
+  {
+    label: 'Cancelled',
+    value: 'CANCELLED',
+    href: '/admin/fund-space/payouts?status=CANCELLED',
+  },
+];
 
-type PayoutRow = Payout & {
-  fund_space?: FundSpace | null;
-  round?: Round | null;
-  profile?: Profile | null;
-  recipient?: Profile | null;
-  agent?: AgentProfile | null;
-};
+function normalizeStatus(status: string | null | undefined) {
+  return String(status || '').trim().toUpperCase();
+}
 
-type FilterStatus = 'ALL' | 'PENDING' | 'APPROVED' | 'PAID' | 'REJECTED';
+function toNumber(value: number | string | null | undefined) {
+  const parsed = Number(value || 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
-type ActionType = 'APPROVE' | 'MARK_PAID' | 'REJECT';
-
-function formatCurrency(amount: number | null | undefined) {
-  return `GH₵${Number(amount || 0).toLocaleString('en-GH', {
+function formatCurrency(amount: number | string | null | undefined) {
+  return `GH₵${toNumber(amount).toLocaleString('en-GH', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
 }
 
-function formatDate(dateString: string | null | undefined) {
-  if (!dateString) return 'Not set';
+function formatDate(value: string | null | undefined) {
+  if (!value) return 'Not set';
 
-  const date = new Date(dateString);
-
+  const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Invalid date';
 
   return date.toLocaleDateString('en-GH', {
@@ -141,11 +189,10 @@ function formatDate(dateString: string | null | undefined) {
   });
 }
 
-function formatDateTime(dateString: string | null | undefined) {
-  if (!dateString) return 'Not set';
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return 'Not set';
 
-  const date = new Date(dateString);
-
+  const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Invalid date';
 
   return date.toLocaleString('en-GH', {
@@ -157,54 +204,37 @@ function formatDateTime(dateString: string | null | undefined) {
   });
 }
 
-function getGhanaWeekday() {
-  return new Intl.DateTimeFormat('en-US', {
-    weekday: 'long',
-    timeZone: 'Africa/Accra',
-  }).format(new Date());
-}
+function formatLabel(value: string | null | undefined) {
+  if (!value) return 'Not set';
 
-function isFridayInGhana() {
-  return getGhanaWeekday() === 'Friday';
-}
-
-function getPayoutAmount(payout: PayoutRow | null | undefined) {
-  if (!payout) return 0;
-
-  return Number(payout.net_amount ?? payout.amount ?? payout.gross_amount ?? 0);
-}
-
-function getGrossAmount(payout: PayoutRow | null | undefined) {
-  if (!payout) return 0;
-
-  return Number(payout.gross_amount ?? payout.amount ?? payout.net_amount ?? 0);
-}
-
-function getPayoutUserId(payout: Payout | null | undefined) {
-  if (!payout) return '';
-
-  return payout.recipient_user_id || payout.user_id || '';
-}
-
-function getRecipientProfile(payout: PayoutRow | null | undefined) {
-  if (!payout) return null;
-
-  return payout.profile || payout.recipient || null;
-}
-
-function getRoundDueDate(round: Round | null | undefined) {
-  return round?.contribution_deadline || round?.due_date || null;
-}
-
-function getReadableStatus(status: string | null | undefined) {
-  return String(status || 'PENDING')
+  return value
     .replaceAll('_', ' ')
     .toLowerCase()
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function getPayoutAmount(payout: Payout | null | undefined) {
+  if (!payout) return 0;
+  return toNumber(payout.net_amount ?? payout.amount ?? payout.gross_amount);
+}
+
+function getGrossAmount(payout: Payout | null | undefined) {
+  if (!payout) return 0;
+  return toNumber(payout.gross_amount ?? payout.amount ?? payout.net_amount);
+}
+
+function getRecipientUserId(payout: Payout | null | undefined) {
+  if (!payout) return '';
+  return payout.recipient_user_id || payout.user_id || '';
+}
+
+function getRecipientProfile(payout: Payout | null | undefined) {
+  if (!payout) return null;
+  return payout.profile || payout.recipient || null;
+}
+
 function getStatusStyle(status: string | null | undefined) {
-  const value = String(status || 'PENDING').toUpperCase();
+  const value = normalizeStatus(status);
 
   if (['PAID', 'COMPLETED', 'SUCCESS'].includes(value)) {
     return 'border-emerald-200 bg-emerald-50 text-emerald-700';
@@ -232,549 +262,634 @@ function getStatusStyle(status: string | null | undefined) {
   return 'border-slate-200 bg-slate-50 text-slate-700';
 }
 
-function isPendingPayout(status: string | null | undefined) {
-  const value = String(status || '').toUpperCase();
-
+function canApprovePayout(payout: Payout) {
   return [
-    'PENDING',
     'PENDING_ADMIN_APPROVAL',
     'READY_FOR_ADMIN_APPROVAL',
     'READY_FOR_PAYOUT',
-  ].includes(value);
+  ].includes(normalizeStatus(payout.status));
 }
 
-function canMarkPaid(status: string | null | undefined) {
-  const value = String(status || '').toUpperCase();
-
-  return ['APPROVED', 'APPROVED_FOR_PAYOUT'].includes(value);
+function canRejectPayout(payout: Payout) {
+  return [
+    'PENDING_ADMIN_APPROVAL',
+    'READY_FOR_ADMIN_APPROVAL',
+    'READY_FOR_PAYOUT',
+  ].includes(normalizeStatus(payout.status));
 }
 
-function maskPhone(phone: string | null | undefined) {
-  if (!phone) return 'No phone';
-
-  const clean = phone.trim();
-
-  if (clean.length <= 6) return clean;
-
-  return `${clean.slice(0, 3)}****${clean.slice(-3)}`;
-}
-
-function SummaryCard({
-  title,
-  value,
-  helper,
-  icon,
-  active,
-  onClick,
-}: {
-  title: string;
-  value: string | number;
-  helper: string;
-  icon: ReactNode;
-  active?: boolean;
-  onClick?: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-3xl border p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
-        active
-          ? 'border-emerald-300 bg-emerald-50'
-          : 'border-slate-200 bg-white hover:border-emerald-200'
-      }`}
-    >
-      <div className="mb-4 inline-flex rounded-2xl bg-emerald-50 p-3 text-emerald-700">
-        {icon}
-      </div>
-
-      <p className="text-sm font-bold text-slate-500">{title}</p>
-      <h3 className="mt-1 text-2xl font-black text-slate-900">{value}</h3>
-      <p className="mt-1 text-xs leading-5 text-slate-500">{helper}</p>
-    </button>
+function canMarkPaid(payout: Payout) {
+  return ['APPROVED', 'APPROVED_FOR_PAYOUT'].includes(
+    normalizeStatus(payout.status)
   );
 }
 
-function DetailBox({
-  label,
-  value,
-  icon,
+function getPayoutReviewState(payout: Payout) {
+  const status = normalizeStatus(payout.status);
+
+  if (
+    ['PENDING_ADMIN_APPROVAL', 'READY_FOR_ADMIN_APPROVAL', 'READY_FOR_PAYOUT'].includes(
+      status
+    )
+  ) {
+    return {
+      title: 'Pending Admin Approval',
+      description:
+        'This payout is waiting for admin approval. Review the recipient and round details before approving.',
+      className: 'border-amber-200 bg-amber-50 text-amber-800',
+    };
+  }
+
+  if (['APPROVED', 'APPROVED_FOR_PAYOUT'].includes(status)) {
+    return {
+      title: 'Payout Approved',
+      description:
+        'This payout has been approved. The next action is to send the money and mark it as paid.',
+      className: 'border-blue-200 bg-blue-50 text-blue-800',
+    };
+  }
+
+  if (status === 'PAID') {
+    return {
+      title: 'Payout Paid',
+      description:
+        'This payout has already been marked as paid. No further payout action is required.',
+      className: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+    };
+  }
+
+  if (status === 'REJECTED') {
+    return {
+      title: 'Payout Rejected',
+      description:
+        payout.rejection_reason ||
+        'This payout was rejected. Check the rejection reason before taking any further action.',
+      className: 'border-red-200 bg-red-50 text-red-800',
+    };
+  }
+
+  if (status === 'FAILED') {
+    return {
+      title: 'Payout Failed',
+      description:
+        payout.failure_reason ||
+        'This payout failed. Review the payout details and payment reference.',
+      className: 'border-red-200 bg-red-50 text-red-800',
+    };
+  }
+
+  if (status === 'CANCELLED') {
+    return {
+      title: 'Payout Cancelled',
+      description: 'This payout was cancelled and cannot be processed.',
+      className: 'border-red-200 bg-red-50 text-red-800',
+    };
+  }
+
+  return {
+    title: formatLabel(status),
+    description: 'This payout is not currently open for admin processing.',
+    className: 'border-slate-200 bg-white text-slate-700',
+  };
+}
+
+function getApproveButtonText(status: string, loading: boolean) {
+  if (loading) return 'Approving...';
+
+  if (
+    ['PENDING_ADMIN_APPROVAL', 'READY_FOR_ADMIN_APPROVAL', 'READY_FOR_PAYOUT'].includes(
+      status
+    )
+  ) {
+    return 'Approve Payout';
+  }
+
+  if (['APPROVED', 'APPROVED_FOR_PAYOUT'].includes(status)) {
+    return 'Payout Approved';
+  }
+
+  if (status === 'PAID') return 'Already Approved';
+  if (status === 'REJECTED') return 'Cannot Approve — Rejected';
+  if (status === 'FAILED') return 'Cannot Approve — Failed';
+  if (status === 'CANCELLED') return 'Cannot Approve — Cancelled';
+
+  return `Cannot Approve — ${formatLabel(status)}`;
+}
+
+function getMarkPaidButtonText(status: string, loading: boolean) {
+  if (loading) return 'Marking Paid...';
+
+  if (['APPROVED', 'APPROVED_FOR_PAYOUT'].includes(status)) {
+    return 'Mark as Paid';
+  }
+
+  if (status === 'PAID') return 'Payout Paid';
+  if (
+    ['PENDING_ADMIN_APPROVAL', 'READY_FOR_ADMIN_APPROVAL', 'READY_FOR_PAYOUT'].includes(
+      status
+    )
+  ) {
+    return 'Cannot Mark Paid — Pending';
+  }
+
+  if (status === 'REJECTED') return 'Cannot Mark Paid — Rejected';
+  if (status === 'FAILED') return 'Cannot Mark Paid — Failed';
+  if (status === 'CANCELLED') return 'Cannot Mark Paid — Cancelled';
+
+  return `Cannot Mark Paid — ${formatLabel(status)}`;
+}
+
+function getRejectButtonText(status: string, loading: boolean) {
+  if (loading) return 'Rejecting...';
+
+  if (
+    ['PENDING_ADMIN_APPROVAL', 'READY_FOR_ADMIN_APPROVAL', 'READY_FOR_PAYOUT'].includes(
+      status
+    )
+  ) {
+    return 'Reject Payout';
+  }
+
+  if (['APPROVED', 'APPROVED_FOR_PAYOUT'].includes(status)) {
+    return 'Cannot Reject — Approved';
+  }
+
+  if (status === 'PAID') return 'Cannot Reject — Paid';
+  if (status === 'REJECTED') return 'Payout Rejected';
+  if (status === 'FAILED') return 'Cannot Reject — Failed';
+  if (status === 'CANCELLED') return 'Cannot Reject — Cancelled';
+
+  return `Cannot Reject — ${formatLabel(status)}`;
+}
+
+function buildStats(payouts: Payout[]): PayoutStats {
+  return payouts.reduce<PayoutStats>(
+    (stats, payout) => {
+      const status = normalizeStatus(payout.status);
+      const amount = getPayoutAmount(payout);
+
+      stats.total += 1;
+      stats.totalValue += amount;
+
+      if (
+        [
+          'PENDING_ADMIN_APPROVAL',
+          'READY_FOR_ADMIN_APPROVAL',
+          'READY_FOR_PAYOUT',
+        ].includes(status)
+      ) {
+        stats.pendingApproval += 1;
+        stats.pendingValue += amount;
+      }
+
+      if (['APPROVED', 'APPROVED_FOR_PAYOUT'].includes(status)) {
+        stats.approved += 1;
+      }
+
+      if (status === 'PAID') {
+        stats.paid += 1;
+        stats.paidValue += amount;
+      }
+
+      if (status === 'REJECTED') stats.rejected += 1;
+      if (status === 'FAILED') stats.failed += 1;
+      if (status === 'CANCELLED') stats.cancelled += 1;
+
+      return stats;
+    },
+    { ...defaultStats }
+  );
+}
+
+function matchesSearch(payout: Payout, search: string) {
+  if (!search) return true;
+
+  const recipient = getRecipientProfile(payout);
+
+  const haystack = [
+    payout.id,
+    payout.status,
+    payout.payout_method,
+    payout.payout_reference,
+    payout.fund_space?.name,
+    payout.fund_space?.status,
+    payout.round?.round_number ? `round ${payout.round.round_number}` : '',
+    payout.round?.status,
+    recipient?.full_name,
+    recipient?.phone,
+    recipient?.email,
+    recipient?.momo_number,
+    recipient?.verification_status,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return haystack.includes(search.toLowerCase());
+}
+
+function SummaryItem({
+  item,
+  active,
 }: {
-  label: string;
-  value: string;
-  icon?: ReactNode;
+  item: SummaryItemData;
+  active: boolean;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-      <p className="mb-2 flex items-center gap-2 text-xs font-black uppercase tracking-wide text-slate-500">
-        {icon}
-        {label}
-      </p>
-      <p className="break-words text-sm font-bold text-slate-900">{value}</p>
-    </div>
+    <Link
+      href={item.href}
+      className={`group min-w-0 rounded-2xl border border-white/70 bg-white/10 p-4 text-white transition hover:-translate-y-0.5 hover:bg-white/20 hover:shadow-lg ${
+        active ? 'bg-white/20 ring-2 ring-white/40' : ''
+      }`}
+    >
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-[11px] font-black uppercase tracking-wide text-emerald-50/90">
+            {item.label}
+          </p>
+
+          <p className="mt-2 truncate text-2xl font-black text-white md:text-3xl">
+            {item.value}
+          </p>
+
+          {item.helper && (
+            <p className="mt-1 truncate text-xs font-semibold text-emerald-50/80">
+              {item.helper}
+            </p>
+          )}
+        </div>
+
+        <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-emerald-50/80 transition group-hover:translate-x-1 group-hover:text-white" />
+      </div>
+    </Link>
   );
 }
 
 function StatusPill({ status }: { status: string | null | undefined }) {
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
+      className={`inline-flex max-w-full rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
         status
       )}`}
     >
-      {getReadableStatus(status)}
+      <span className="truncate">{formatLabel(status)}</span>
     </span>
   );
 }
 
-function ApprovalGuidanceCard({
-  fridayApprovalOpen,
-  ghanaWeekday,
-  selectedPayout,
+function CompactInfo({
+  label,
+  value,
 }: {
-  fridayApprovalOpen: boolean;
-  ghanaWeekday: string;
-  selectedPayout: PayoutRow;
+  label: string;
+  value: string | number | null | undefined;
 }) {
-  const status = String(selectedPayout.status || '').toUpperCase();
+  return (
+    <div className="min-w-0">
+      <p className="truncate text-[11px] font-black uppercase tracking-wide text-slate-400">
+        {label}
+      </p>
+      <p className="truncate text-sm font-black text-slate-900">
+        {value ?? 'Not set'}
+      </p>
+    </div>
+  );
+}
+
+function MessageBox({
+  type,
+  message,
+}: {
+  type: 'success' | 'error' | 'info';
+  message: string;
+}) {
+  const isSuccess = type === 'success';
+  const isInfo = type === 'info';
 
   return (
-    <section
-      className={`rounded-3xl border p-5 shadow-sm ${
-        fridayApprovalOpen
-          ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-          : 'border-amber-200 bg-amber-50 text-amber-800'
+    <div
+      className={`rounded-2xl border p-4 text-sm font-semibold ${
+        isSuccess
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          : isInfo
+            ? 'border-blue-200 bg-blue-50 text-blue-700'
+            : 'border-red-200 bg-red-50 text-red-700'
       }`}
     >
       <div className="flex items-start gap-3">
-        <div className="rounded-2xl bg-white p-3">
-          {fridayApprovalOpen ? (
-            <CheckCircle2 className="h-6 w-6 text-emerald-700" />
-          ) : (
-            <AlertTriangle className="h-6 w-6 text-amber-700" />
-          )}
-        </div>
-
-        <div className="flex-1">
-          <p className="text-xs font-black uppercase tracking-wide opacity-80">
-            Approval Guidance
-          </p>
-
-          <h2 className="mt-1 text-xl font-black">
-            {fridayApprovalOpen
-              ? 'Payout approval window is open'
-              : 'Payout approval window is closed'}
-          </h2>
-
-          <p className="mt-2 text-sm font-semibold leading-6 opacity-90">
-            {fridayApprovalOpen
-              ? 'Today is Friday in Ghana. Admin can approve pending payouts after reviewing the Smart Payout Risk Card and Trust Shield.'
-              : `Today is ${ghanaWeekday} in Ghana. This page keeps the approve button locked until Friday, but you can still review payout risk and recipient details.`}
-          </p>
-
-          <div className="mt-4 grid gap-3 md:grid-cols-3">
-            <DetailBox
-              label="Current Status"
-              value={getReadableStatus(status)}
-              icon={<Clock className="h-4 w-4" />}
-            />
-
-            <DetailBox
-              label="Approved At"
-              value={formatDateTime(selectedPayout.approved_at)}
-              icon={<BadgeCheck className="h-4 w-4" />}
-            />
-
-            <DetailBox
-              label="Paid At"
-              value={formatDateTime(selectedPayout.paid_at)}
-              icon={<HandCoins className="h-4 w-4" />}
-            />
-          </div>
-        </div>
+        {isSuccess ? (
+          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
+        ) : (
+          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+        )}
+        <p className="min-w-0 break-words leading-6">{message}</p>
       </div>
-    </section>
+    </div>
   );
 }
 
-function PaymentCard({ selectedPayout }: { selectedPayout: PayoutRow }) {
-  const recipient = getRecipientProfile(selectedPayout);
+export default function AdminFundSpacePayoutsPage() {
+  const searchParams = useSearchParams();
 
-  return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
-      <div className="mb-5 flex items-start gap-3">
-        <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-700">
-          <Smartphone className="h-6 w-6" />
-        </div>
+  const fundSpaceId = searchParams.get('fund_space_id') || '';
 
-        <div>
-          <h2 className="text-lg font-black text-slate-900">
-            Payout Payment Details
-          </h2>
-          <p className="mt-1 text-sm leading-6 text-slate-500">
-            Use these details when paying the recipient manually through Mobile
-            Money or bank transfer.
-          </p>
-        </div>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <DetailBox
-          label="MoMo Number"
-          value={recipient?.momo_number || recipient?.phone || 'Not provided'}
-          icon={<Phone className="h-4 w-4" />}
-        />
-
-        <DetailBox
-          label="Payout Method"
-          value={selectedPayout.payout_method || 'MOMO'}
-          icon={<Smartphone className="h-4 w-4" />}
-        />
-
-        <DetailBox
-          label="Bank Name"
-          value={recipient?.bank_name || 'Not provided'}
-          icon={<Banknote className="h-4 w-4" />}
-        />
-
-        <DetailBox
-          label="Bank Account"
-          value={
-            recipient?.bank_account_number
-              ? `${recipient.bank_account_name || 'Account'} • ${
-                  recipient.bank_account_number
-                }`
-              : 'Not provided'
-          }
-          icon={<Banknote className="h-4 w-4" />}
-        />
-      </div>
-
-      {(selectedPayout.payout_reference ||
-        selectedPayout.rejection_reason ||
-        selectedPayout.failure_reason) && (
-        <div className="mt-5 rounded-2xl border border-slate-100 bg-slate-50 p-4">
-          <p className="text-xs font-black uppercase tracking-wide text-slate-500">
-            Notes / References
-          </p>
-
-          {selectedPayout.payout_reference && (
-            <p className="mt-2 text-sm font-semibold text-slate-700">
-              Payout reference: {selectedPayout.payout_reference}
-            </p>
-          )}
-
-          {selectedPayout.rejection_reason && (
-            <p className="mt-2 text-sm font-semibold text-red-700">
-              Rejection reason: {selectedPayout.rejection_reason}
-            </p>
-          )}
-
-          {selectedPayout.failure_reason && (
-            <p className="mt-2 text-sm font-semibold text-red-700">
-              Failure reason: {selectedPayout.failure_reason}
-            </p>
-          )}
-        </div>
-      )}
-    </section>
-  );
-}
-
-export default function AdminPayoutsPage() {
-  const [payouts, setPayouts] = useState<PayoutRow[]>([]);
+  const [payouts, setPayouts] = useState<Payout[]>([]);
+  const [statusFilter, setStatusFilter] = useState<PayoutStatusFilter>('ALL');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedPayout, setSelectedPayout] = useState<Payout | null>(null);
+  const [rejectPayout, setRejectPayout] = useState<Payout | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
-  const [actionType, setActionType] = useState<ActionType | null>(null);
+  const [actionType, setActionType] = useState<ActionType>(null);
+  const [message, setMessage] = useState<{
+    type: 'success' | 'error' | 'info';
+    text: string;
+  } | null>(null);
 
-  const [selectedPayoutId, setSelectedPayoutId] = useState<string | null>(null);
+  useEffect(() => {
+    const urlStatus = normalizeStatus(searchParams.get('status') || 'ALL');
 
-  const [errorMessage, setErrorMessage] = useState('');
-  const [successMessage, setSuccessMessage] = useState('');
-
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<FilterStatus>('PENDING');
-
-  const [rejectPayoutId, setRejectPayoutId] = useState<string | null>(null);
-  const [rejectReason, setRejectReason] = useState('');
-
-  const fridayApprovalOpen = isFridayInGhana();
-  const ghanaWeekday = getGhanaWeekday();
-
-  const selectedPayout = useMemo(() => {
-    if (!selectedPayoutId) return payouts[0] || null;
-
-    return payouts.find((item) => item.id === selectedPayoutId) || null;
-  }, [payouts, selectedPayoutId]);
-
-  const stats = useMemo(() => {
-    const pending = payouts.filter((item) => isPendingPayout(item.status));
-    const approved = payouts.filter((item) =>
-      ['APPROVED', 'APPROVED_FOR_PAYOUT'].includes(
-        String(item.status || '').toUpperCase()
-      )
-    );
-    const paid = payouts.filter(
-      (item) => String(item.status || '').toUpperCase() === 'PAID'
-    );
-    const rejected = payouts.filter((item) =>
-      ['REJECTED', 'FAILED', 'CANCELLED'].includes(
-        String(item.status || '').toUpperCase()
-      )
-    );
-
-    return {
-      total: payouts.length,
-      pending: pending.length,
-      approved: approved.length,
-      paid: paid.length,
-      rejected: rejected.length,
-      pendingValue: pending.reduce(
-        (sum, item) => sum + Number(getPayoutAmount(item) || 0),
-        0
-      ),
-      approvedValue: approved.reduce(
-        (sum, item) => sum + Number(getPayoutAmount(item) || 0),
-        0
-      ),
-      paidValue: paid.reduce(
-        (sum, item) => sum + Number(getPayoutAmount(item) || 0),
-        0
-      ),
-    };
-  }, [payouts]);
-
-  const filteredPayouts = useMemo(() => {
-    const search = searchTerm.trim().toLowerCase();
-
-    return payouts.filter((payout) => {
-      const status = String(payout.status || '').toUpperCase();
-      const recipient = getRecipientProfile(payout);
-
-      if (statusFilter === 'PENDING' && !isPendingPayout(status)) return false;
-      if (
-        statusFilter === 'APPROVED' &&
-        !['APPROVED', 'APPROVED_FOR_PAYOUT'].includes(status)
-      ) {
-        return false;
-      }
-      if (statusFilter === 'PAID' && status !== 'PAID') return false;
-      if (
-        statusFilter === 'REJECTED' &&
-        !['REJECTED', 'FAILED', 'CANCELLED'].includes(status)
-      ) {
-        return false;
-      }
-
-      if (!search) return true;
-
-      const haystack = [
-        recipient?.full_name,
-        recipient?.phone,
-        recipient?.email,
-        payout.fund_space?.name,
-        payout.round?.round_number ? `round ${payout.round.round_number}` : '',
-        payout.payout_reference,
-        payout.status,
-        payout.id,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-
-      return haystack.includes(search);
-    });
-  }, [payouts, searchTerm, statusFilter]);
-
-  const loadPayouts = useCallback(async (showRefresh = false) => {
-    try {
-      if (showRefresh) {
-        setRefreshing(true);
-      } else {
-        setLoading(true);
-      }
-
-      setErrorMessage('');
-      setSuccessMessage('');
-
-      const { data, error } = await supabase
-        .from('fund_space_payouts')
-        .select(
-          `
-          *,
-          fund_space:fund_spaces (
-            id,
-            name,
-            contribution_amount,
-            status,
-            current_round_number
-          ),
-          round:fund_space_rounds (
-            id,
-            fund_space_id,
-            round_number,
-            contribution_deadline,
-            week_start_date,
-            week_end_date,
-            status
-          ),
-          profile:profiles (
-            id,
-            full_name,
-            phone,
-            email,
-            momo_number,
-            bank_name,
-            bank_account_number,
-            bank_account_name,
-            registered_by_agent,
-            verification_status,
-            status
-          )
-        `
-        )
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        console.warn('Payout relationship query warning:', error.message);
-        await loadPayoutsFallback();
-        return;
-      }
-
-      const rows = (data || []) as unknown as PayoutRow[];
-
-      setPayouts(rows);
-      setSelectedPayoutId((current) => {
-        if (current && rows.some((item) => item.id === current)) return current;
-
-        return rows[0]?.id || null;
-      });
-    } catch (error: unknown) {
-      console.error('Admin payouts load error:', error);
-
-      const message =
-        error instanceof Error ? error.message : 'Unable to load payouts.';
-
-      setErrorMessage(message);
-      setPayouts([]);
-      setSelectedPayoutId(null);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+    if (
+      [
+        'PENDING_ADMIN_APPROVAL',
+        'APPROVED',
+        'APPROVED_FOR_PAYOUT',
+        'PAID',
+        'REJECTED',
+        'FAILED',
+        'CANCELLED',
+      ].includes(urlStatus)
+    ) {
+      setStatusFilter(urlStatus as PayoutStatusFilter);
+    } else {
+      setStatusFilter('ALL');
     }
-  }, []);
+  }, [searchParams]);
 
-  const loadPayoutsFallback = async () => {
-    const { data: payoutData, error: payoutError } = await supabase
+  const loadPayoutsFallback = useCallback(async () => {
+    const db = supabase as any;
+
+    let payoutQuery = db
       .from('fund_space_payouts')
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (payoutError) {
-      throw payoutError;
+    if (fundSpaceId) {
+      payoutQuery = payoutQuery.eq('fund_space_id', fundSpaceId);
     }
 
-    const basePayouts = (payoutData || []) as unknown as Payout[];
+    const { data: payoutRows, error: payoutError } = await payoutQuery;
+
+    if (payoutError) throw payoutError;
+
+    const basePayouts = (payoutRows || []) as Payout[];
 
     if (basePayouts.length === 0) {
       setPayouts([]);
-      setSelectedPayoutId(null);
       return;
     }
 
-    const fundSpaceIds = Array.from(
-      new Set(basePayouts.map((item) => item.fund_space_id))
-    ).filter(Boolean);
+    const fundSpaceIds = [
+      ...new Set(basePayouts.map((item) => item.fund_space_id).filter(Boolean)),
+    ];
+    const roundIds = [
+      ...new Set(basePayouts.map((item) => item.round_id).filter(Boolean)),
+    ];
+    const recipientIds = [
+      ...new Set(basePayouts.map((item) => getRecipientUserId(item)).filter(Boolean)),
+    ];
 
-    const roundIds = Array.from(
-      new Set(basePayouts.map((item) => item.round_id))
-    ).filter(Boolean);
+    const [fundSpacesResult, roundsResult, profilesResult] = await Promise.all([
+      fundSpaceIds.length
+        ? db
+            .from('fund_spaces')
+            .select('id, name, contribution_amount, status, current_round_number')
+            .in('id', fundSpaceIds)
+        : Promise.resolve({ data: [], error: null }),
 
-    const userIds = Array.from(
-      new Set(basePayouts.map((item) => getPayoutUserId(item)))
-    ).filter(Boolean);
+      roundIds.length
+        ? db
+            .from('fund_space_rounds')
+            .select(
+              'id, fund_space_id, round_number, contribution_deadline, week_start_date, week_end_date, status'
+            )
+            .in('id', roundIds)
+        : Promise.resolve({ data: [], error: null }),
 
-    const [fundSpacesResponse, roundsResponse, profilesResponse] =
-      await Promise.all([
-        fundSpaceIds.length
-          ? supabase
-              .from('fund_spaces')
-              .select('id, name, contribution_amount, status, current_round_number')
-              .in('id', fundSpaceIds)
-          : Promise.resolve({ data: [], error: null }),
+      recipientIds.length
+        ? db
+            .from('profiles')
+            .select(
+              'id, full_name, phone, email, momo_number, bank_name, bank_account_number, bank_account_name, registered_by_agent, verification_status, status'
+            )
+            .in('id', recipientIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
 
-        roundIds.length
-          ? supabase
-              .from('fund_space_rounds')
-              .select(
-                'id, fund_space_id, round_number, contribution_deadline, week_start_date, week_end_date, status'
-              )
-              .in('id', roundIds)
-          : Promise.resolve({ data: [], error: null }),
+    if (fundSpacesResult.error) throw fundSpacesResult.error;
+    if (roundsResult.error) throw roundsResult.error;
+    if (profilesResult.error) throw profilesResult.error;
 
-        userIds.length
-          ? supabase
-              .from('profiles')
-              .select(
-                'id, full_name, phone, email, momo_number, bank_name, bank_account_number, bank_account_name, registered_by_agent, verification_status, status'
-              )
-              .in('id', userIds)
-          : Promise.resolve({ data: [], error: null }),
-      ]);
+    const fundSpaceById = new Map(
+      ((fundSpacesResult.data || []) as FundSpaceLite[]).map((item) => [
+        item.id,
+        item,
+      ])
+    );
+    const roundById = new Map(
+      ((roundsResult.data || []) as RoundLite[]).map((item) => [item.id, item])
+    );
+    const profileById = new Map(
+      ((profilesResult.data || []) as ProfileLite[]).map((item) => [
+        item.id,
+        item,
+      ])
+    );
 
-    if (fundSpacesResponse.error) {
-      console.warn(
-        'Fund Spaces fallback warning:',
-        fundSpacesResponse.error.message
-      );
-    }
-
-    if (roundsResponse.error) {
-      console.warn('Rounds fallback warning:', roundsResponse.error.message);
-    }
-
-    if (profilesResponse.error) {
-      console.warn('Profiles fallback warning:', profilesResponse.error.message);
-    }
-
-    const fundSpaces = (fundSpacesResponse.data || []) as FundSpace[];
-    const rounds = (roundsResponse.data || []) as Round[];
-    const profiles = (profilesResponse.data || []) as Profile[];
-
-    const rows: PayoutRow[] = basePayouts.map((payout) => ({
+    const mappedPayouts = basePayouts.map((payout) => ({
       ...payout,
-      fund_space:
-        fundSpaces.find((item) => item.id === payout.fund_space_id) || null,
-      round: rounds.find((item) => item.id === payout.round_id) || null,
-      profile:
-        profiles.find((item) => item.id === getPayoutUserId(payout)) || null,
+      fund_space: fundSpaceById.get(payout.fund_space_id) || null,
+      round: roundById.get(payout.round_id) || null,
+      profile: profileById.get(getRecipientUserId(payout)) || null,
     }));
 
-    setPayouts(rows);
-    setSelectedPayoutId((current) => {
-      if (current && rows.some((item) => item.id === current)) return current;
+    setPayouts(mappedPayouts);
+  }, [fundSpaceId]);
 
-      return rows[0]?.id || null;
-    });
-  };
+  const loadPayouts = useCallback(
+    async (showRefresh = false) => {
+      try {
+        if (showRefresh) {
+          setRefreshing(true);
+        } else {
+          setLoading(true);
+        }
+
+        setMessage(null);
+
+        const db = supabase as any;
+
+        let query = db
+          .from('fund_space_payouts')
+          .select(
+            `
+            *,
+            fund_space:fund_spaces (
+              id,
+              name,
+              contribution_amount,
+              status,
+              current_round_number
+            ),
+            round:fund_space_rounds (
+              id,
+              fund_space_id,
+              round_number,
+              contribution_deadline,
+              week_start_date,
+              week_end_date,
+              status
+            ),
+            profile:profiles (
+              id,
+              full_name,
+              phone,
+              email,
+              momo_number,
+              bank_name,
+              bank_account_number,
+              bank_account_name,
+              registered_by_agent,
+              verification_status,
+              status
+            )
+          `
+          )
+          .order('created_at', { ascending: false });
+
+        if (fundSpaceId) {
+          query = query.eq('fund_space_id', fundSpaceId);
+        }
+
+        const { data, error } = await query;
+
+        if (error) {
+          console.warn(
+            'Payout relationship query failed. Using fallback:',
+            error.message
+          );
+          await loadPayoutsFallback();
+          return;
+        }
+
+        setPayouts((data || []) as Payout[]);
+      } catch (error) {
+        setPayouts([]);
+        setMessage({
+          type: 'error',
+          text:
+            error instanceof Error
+              ? error.message
+              : 'Unable to load Fund Space payouts.',
+        });
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [fundSpaceId, loadPayoutsFallback]
+  );
 
   useEffect(() => {
     loadPayouts();
   }, [loadPayouts]);
 
-  async function handleApprovePayout(payout: PayoutRow) {
-    if (!fridayApprovalOpen) {
-      setErrorMessage(
-        `Payout approvals are only allowed on Fridays. Today is ${ghanaWeekday} in Ghana.`
-      );
-      setSuccessMessage('');
-      return;
-    }
+  const stats = useMemo(() => buildStats(payouts), [payouts]);
 
+  const summaryItems: SummaryItemData[] = [
+    {
+      label: 'Total Payouts',
+      value: stats.total,
+      helper: formatCurrency(stats.totalValue),
+      href: fundSpaceId
+        ? `/admin/fund-space/payouts?fund_space_id=${fundSpaceId}`
+        : '/admin/fund-space/payouts',
+      status: 'ALL',
+    },
+    {
+      label: 'Pending Approval',
+      value: stats.pendingApproval,
+      helper: formatCurrency(stats.pendingValue),
+      href: fundSpaceId
+        ? `/admin/fund-space/payouts?fund_space_id=${fundSpaceId}&status=PENDING_ADMIN_APPROVAL`
+        : '/admin/fund-space/payouts?status=PENDING_ADMIN_APPROVAL',
+      status: 'PENDING_ADMIN_APPROVAL',
+    },
+    {
+      label: 'Approved',
+      value: stats.approved,
+      helper: 'Ready to pay',
+      href: fundSpaceId
+        ? `/admin/fund-space/payouts?fund_space_id=${fundSpaceId}&status=APPROVED`
+        : '/admin/fund-space/payouts?status=APPROVED',
+      status: 'APPROVED',
+    },
+    {
+      label: 'Paid',
+      value: stats.paid,
+      helper: formatCurrency(stats.paidValue),
+      href: fundSpaceId
+        ? `/admin/fund-space/payouts?fund_space_id=${fundSpaceId}&status=PAID`
+        : '/admin/fund-space/payouts?status=PAID',
+      status: 'PAID',
+    },
+    {
+      label: 'Rejected',
+      value: stats.rejected,
+      helper: 'Rejected payouts',
+      href: fundSpaceId
+        ? `/admin/fund-space/payouts?fund_space_id=${fundSpaceId}&status=REJECTED`
+        : '/admin/fund-space/payouts?status=REJECTED',
+      status: 'REJECTED',
+    },
+    {
+      label: 'Failed',
+      value: stats.failed,
+      helper: 'Problem payouts',
+      href: fundSpaceId
+        ? `/admin/fund-space/payouts?fund_space_id=${fundSpaceId}&status=FAILED`
+        : '/admin/fund-space/payouts?status=FAILED',
+      status: 'FAILED',
+    },
+  ];
+
+  const filteredPayouts = useMemo(() => {
+    const search = searchTerm.trim();
+
+    return payouts.filter((payout) => {
+      const status = normalizeStatus(payout.status);
+
+      const matchesStatus =
+        statusFilter === 'ALL' ||
+        status === statusFilter ||
+        (statusFilter === 'PENDING_ADMIN_APPROVAL' &&
+          [
+            'PENDING_ADMIN_APPROVAL',
+            'READY_FOR_ADMIN_APPROVAL',
+            'READY_FOR_PAYOUT',
+          ].includes(status)) ||
+        (statusFilter === 'APPROVED' &&
+          ['APPROVED', 'APPROVED_FOR_PAYOUT'].includes(status));
+
+      return matchesStatus && matchesSearch(payout, search);
+    });
+  }, [payouts, searchTerm, statusFilter]);
+
+  async function handleApprovePayout(payout: Payout) {
     const confirmed = window.confirm(
-      'Have you reviewed the Smart Payout Risk Card and the recipient Trust Shield before approving this payout?'
+      'Approve this payout after reviewing recipient details and payout risk?'
     );
 
     if (!confirmed) return;
@@ -782,8 +897,7 @@ export default function AdminPayoutsPage() {
     try {
       setActionLoadingId(payout.id);
       setActionType('APPROVE');
-      setErrorMessage('');
-      setSuccessMessage('');
+      setMessage(null);
 
       const { error } = await supabase.rpc('approve_fund_space_payout', {
         p_payout_id: payout.id,
@@ -791,14 +905,17 @@ export default function AdminPayoutsPage() {
 
       if (error) throw error;
 
-      setSuccessMessage('Payout approved successfully.');
-      await loadPayouts(true);
-    } catch (error: unknown) {
-      console.error('Approve payout error:', error);
+      setMessage({
+        type: 'success',
+        text: 'Payout approved successfully.',
+      });
 
-      setErrorMessage(
-        error instanceof Error ? error.message : 'Unable to approve payout.'
-      );
+      await loadPayouts(true);
+    } catch (error) {
+      setMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Unable to approve payout.',
+      });
     } finally {
       setActionLoadingId(null);
       setActionType(null);
@@ -806,55 +923,62 @@ export default function AdminPayoutsPage() {
   }
 
   async function handleRejectPayout() {
-    if (!rejectPayoutId) {
-      setErrorMessage('No payout selected for rejection.');
+    if (!rejectPayout) {
+      setMessage({
+        type: 'error',
+        text: 'No payout selected for rejection.',
+      });
       return;
     }
 
     if (!rejectReason.trim()) {
-      setErrorMessage('Please enter a reason for rejecting this payout.');
+      setMessage({
+        type: 'error',
+        text: 'Please enter a rejection reason.',
+      });
       return;
     }
 
     try {
-      setActionLoadingId(rejectPayoutId);
+      setActionLoadingId(rejectPayout.id);
       setActionType('REJECT');
-      setErrorMessage('');
-      setSuccessMessage('');
+      setMessage(null);
 
       const { error } = await supabase.rpc('reject_fund_space_payout', {
-        p_payout_id: rejectPayoutId,
+        p_payout_id: rejectPayout.id,
         p_reason: rejectReason.trim(),
       });
 
       if (error) throw error;
 
-      setSuccessMessage('Payout rejected successfully.');
-      setRejectPayoutId(null);
+      setMessage({
+        type: 'success',
+        text: 'Payout rejected successfully.',
+      });
+
+      setRejectPayout(null);
       setRejectReason('');
       await loadPayouts(true);
-    } catch (error: unknown) {
-      console.error('Reject payout error:', error);
-
-      setErrorMessage(
-        error instanceof Error ? error.message : 'Unable to reject payout.'
-      );
+    } catch (error) {
+      setMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Unable to reject payout.',
+      });
     } finally {
       setActionLoadingId(null);
       setActionType(null);
     }
   }
 
-  async function handleMarkAsPaid(payout: PayoutRow) {
+  async function handleMarkAsPaid(payout: Payout) {
     const reference = window.prompt(
-      'Enter the MoMo payout transaction/reference number, or leave blank to continue without reference.'
+      'Enter the MoMo payout transaction/reference number, or leave blank if unavailable.'
     );
 
     try {
       setActionLoadingId(payout.id);
       setActionType('MARK_PAID');
-      setErrorMessage('');
-      setSuccessMessage('');
+      setMessage(null);
 
       const rpcClient = supabase as any;
 
@@ -873,14 +997,17 @@ export default function AdminPayoutsPage() {
         if (fallback.error) throw fallback.error;
       }
 
-      setSuccessMessage('Payout marked as paid successfully.');
-      await loadPayouts(true);
-    } catch (error: unknown) {
-      console.error('Mark payout paid error:', error);
+      setMessage({
+        type: 'success',
+        text: 'Payout marked as paid successfully.',
+      });
 
-      setErrorMessage(
-        error instanceof Error ? error.message : 'Unable to mark payout as paid.'
-      );
+      await loadPayouts(true);
+    } catch (error) {
+      setMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Unable to mark payout as paid.',
+      });
     } finally {
       setActionLoadingId(null);
       setActionType(null);
@@ -889,15 +1016,12 @@ export default function AdminPayoutsPage() {
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-slate-50 px-4 py-6 md:px-8">
-        <div className="mx-auto flex min-h-[60vh] max-w-7xl items-center justify-center">
-          <div className="text-center">
-            <Loader2 className="mx-auto mb-4 h-10 w-10 animate-spin text-emerald-700" />
-            <h1 className="text-lg font-black text-slate-900">
-              Loading payout approvals...
-            </h1>
-            <p className="mt-2 text-sm text-slate-500">
-              Please wait while TrustPoint loads payout records.
+      <main className="min-h-screen bg-slate-50 px-4 py-6">
+        <div className="mx-auto flex min-h-[60vh] max-w-6xl items-center justify-center">
+          <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+            <Loader2 className="mx-auto h-10 w-10 animate-spin text-emerald-700" />
+            <p className="mt-4 text-sm font-black text-slate-600">
+              Loading payout records...
             </p>
           </div>
         </div>
@@ -906,457 +1030,520 @@ export default function AdminPayoutsPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-6 md:px-8">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <section className="rounded-3xl bg-gradient-to-br from-emerald-800 via-emerald-700 to-teal-700 p-6 text-white shadow-sm md:p-8">
-          <div className="flex flex-col gap-6 xl:flex-row xl:items-center xl:justify-between">
-            <div>
-              <p className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 text-xs font-black">
-                <HandCoins className="h-4 w-4" />
-                Admin Payout Control
-              </p>
+    <main className="min-h-screen bg-slate-50 px-4 py-5 md:px-8">
+      <div className="mx-auto max-w-7xl space-y-5">
+        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+          <Link
+            href="/admin/fund-space"
+            className="inline-flex min-h-11 w-fit items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-100"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to Fund Spaces
+          </Link>
 
-              <h1 className="text-3xl font-black tracking-tight md:text-4xl">
-                Payout Approvals
-              </h1>
+          <button
+            type="button"
+            onClick={() => loadPayouts(true)}
+            disabled={refreshing}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        </div>
 
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-emerald-50">
-                Review payout recipients, check Smart Payout Risk, inspect Trust
-                Shield, approve payout, reject payout, or mark approved payout
-                as paid.
-              </p>
+        <section className="overflow-hidden rounded-[2rem] bg-gradient-to-br from-emerald-950 via-emerald-900 to-emerald-800 text-white shadow-sm">
+          <div className="p-5 md:p-8">
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0">
+                <p className="inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-2 text-xs font-black">
+                  <Wallet className="h-4 w-4" />
+                  Admin Fund Space Payouts
+                </p>
 
-              <div className="mt-5 flex flex-wrap gap-3">
-                <Link
-                  href="/admin/fund-space"
-                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl bg-white px-4 text-sm font-black text-emerald-700 transition hover:bg-emerald-50"
-                >
-                  Back to Fund Space
-                  <ArrowRight className="h-4 w-4" />
-                </Link>
+                <h1 className="mt-5 text-3xl font-black tracking-tight md:text-5xl">
+                  Fund Space Payouts
+                </h1>
 
-                <Link
-                  href="/admin"
-                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl bg-white/15 px-4 text-sm font-black text-white ring-1 ring-white/20 transition hover:bg-white/20"
-                >
-                  Admin Dashboard
-                </Link>
-              </div>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2 xl:w-[430px]">
-              <div className="rounded-3xl bg-white/15 p-5 backdrop-blur">
-                <p className="text-sm text-emerald-50">Pending Payout Value</p>
-                <p className="mt-1 text-2xl font-black">
-                  {formatCurrency(stats.pendingValue)}
+                <p className="mt-4 max-w-3xl text-sm font-semibold leading-7 text-emerald-50 md:text-base">
+                  Review, approve, reject, and mark member payouts as paid.
+                  Every button clearly shows the payout status so admins know
+                  what has already happened.
                 </p>
               </div>
 
-              <div className="rounded-3xl bg-white/15 p-5 backdrop-blur">
-                <p className="text-sm text-emerald-50">Today in Ghana</p>
-                <p className="mt-1 text-2xl font-black">{ghanaWeekday}</p>
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  href="/admin/fund-space"
+                  className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-white/25 bg-white/10 px-4 text-xs font-black text-white ring-1 ring-white/10 transition hover:bg-white/20"
+                >
+                  Fund Space
+                </Link>
+
+                <Link
+                  href="/admin/manual-payment-submissions"
+                  className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-white/25 bg-white/10 px-4 text-xs font-black text-white ring-1 ring-white/10 transition hover:bg-white/20"
+                >
+                  MoMo Reviews
+                </Link>
+
+                <button
+                  type="button"
+                  onClick={() => loadPayouts(true)}
+                  disabled={refreshing}
+                  className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full bg-white px-4 text-xs font-black text-emerald-900 transition hover:bg-emerald-50 disabled:opacity-60"
+                >
+                  <RefreshCw
+                    className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`}
+                  />
+                  Refresh
+                </button>
               </div>
             </div>
+
+            <div className="mt-7 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+              {summaryItems.map((item) => (
+                <SummaryItem
+                  key={item.label}
+                  item={item}
+                  active={statusFilter === item.status}
+                />
+              ))}
+            </div>
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <SummaryItem
+                item={{
+                  label: 'Cancelled',
+                  value: stats.cancelled,
+                  helper: 'Stopped payouts',
+                  href: fundSpaceId
+                    ? `/admin/fund-space/payouts?fund_space_id=${fundSpaceId}&status=CANCELLED`
+                    : '/admin/fund-space/payouts?status=CANCELLED',
+                  status: 'CANCELLED',
+                }}
+                active={statusFilter === 'CANCELLED'}
+              />
+
+              <SummaryItem
+                item={{
+                  label: 'Showing',
+                  value: filteredPayouts.length,
+                  helper: 'Current result',
+                  href: fundSpaceId
+                    ? `/admin/fund-space/payouts?fund_space_id=${fundSpaceId}`
+                    : '/admin/fund-space/payouts',
+                  status: 'ALL',
+                }}
+                active={false}
+              />
+
+              <SummaryItem
+                item={{
+                  label: 'Payout Value',
+                  value: formatCurrency(stats.totalValue),
+                  helper: 'All records',
+                  href: fundSpaceId
+                    ? `/admin/fund-space/payouts?fund_space_id=${fundSpaceId}`
+                    : '/admin/fund-space/payouts',
+                  status: 'ALL',
+                }}
+                active={false}
+              />
+            </div>
           </div>
         </section>
 
-        {successMessage && (
-          <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5 text-emerald-700">
-            <div className="flex items-start gap-3">
-              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
-              <p className="text-sm font-bold leading-6">{successMessage}</p>
-            </div>
-          </div>
-        )}
+        {message && <MessageBox type={message.type} message={message.text} />}
 
-        {errorMessage && (
-          <div className="rounded-3xl border border-red-200 bg-red-50 p-5 text-red-700">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
-              <p className="text-sm font-bold leading-6">{errorMessage}</p>
-            </div>
-          </div>
-        )}
-
-        <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-5">
-          <SummaryCard
-            title="Total"
-            value={stats.total}
-            helper="All payout records"
-            icon={<WalletCards className="h-6 w-6" />}
-            active={statusFilter === 'ALL'}
-            onClick={() => setStatusFilter('ALL')}
-          />
-
-          <SummaryCard
-            title="Pending"
-            value={stats.pending}
-            helper="Needs admin review"
-            icon={<Clock className="h-6 w-6" />}
-            active={statusFilter === 'PENDING'}
-            onClick={() => setStatusFilter('PENDING')}
-          />
-
-          <SummaryCard
-            title="Approved"
-            value={stats.approved}
-            helper="Ready to pay"
-            icon={<BadgeCheck className="h-6 w-6" />}
-            active={statusFilter === 'APPROVED'}
-            onClick={() => setStatusFilter('APPROVED')}
-          />
-
-          <SummaryCard
-            title="Paid"
-            value={stats.paid}
-            helper="Completed payouts"
-            icon={<CircleDollarSign className="h-6 w-6" />}
-            active={statusFilter === 'PAID'}
-            onClick={() => setStatusFilter('PAID')}
-          />
-
-          <SummaryCard
-            title="Rejected"
-            value={stats.rejected}
-            helper="Rejected or failed"
-            icon={<XCircle className="h-6 w-6" />}
-            active={statusFilter === 'REJECTED'}
-            onClick={() => setStatusFilter('REJECTED')}
-          />
-        </section>
-
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
-            <div className="relative">
+            <div className="relative min-w-0">
               <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
-                placeholder="Search recipient, phone, Fund Space, round, reference..."
-                className="min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-sm font-semibold outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                placeholder="Search recipient, phone, reference, group, round..."
+                className="min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-sm font-semibold outline-none focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
               />
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              {(['ALL', 'PENDING', 'APPROVED', 'PAID', 'REJECTED'] as FilterStatus[]).map(
-                (status) => (
-                  <button
-                    key={status}
-                    type="button"
-                    onClick={() => setStatusFilter(status)}
-                    className={`min-h-11 rounded-2xl px-4 text-xs font-black transition ${
-                      statusFilter === status
-                        ? 'bg-emerald-700 text-white'
-                        : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    {getReadableStatus(status)}
-                  </button>
-                )
-              )}
-
-              <button
-                type="button"
-                onClick={() => loadPayouts(true)}
-                disabled={refreshing}
-                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-xs font-black text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {refreshing ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-4 w-4" />
-                )}
-                Refresh
-              </button>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {statusTabs.map((tab) => (
+                <Link
+                  key={tab.value}
+                  href={
+                    fundSpaceId
+                      ? `${tab.href}${
+                          tab.href.includes('?') ? '&' : '?'
+                        }fund_space_id=${fundSpaceId}`
+                      : tab.href
+                  }
+                  className={`shrink-0 rounded-2xl px-4 py-3 text-xs font-black transition ${
+                    statusFilter === tab.value
+                      ? 'bg-emerald-700 text-white'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  {tab.label}
+                </Link>
+              ))}
             </div>
           </div>
+
+          <p className="mt-3 text-xs font-bold text-slate-500">
+            Showing {filteredPayouts.length} of {payouts.length} payout records.
+          </p>
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-[420px_1fr]">
-          <div className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-100 p-5">
-              <h2 className="text-lg font-black text-slate-900">
-                Payout Requests
+        <section className="space-y-3">
+          {filteredPayouts.length === 0 ? (
+            <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+              <Wallet className="mx-auto h-10 w-10 text-slate-300" />
+              <h2 className="mt-4 text-lg font-black text-slate-900">
+                No payout records found
               </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Showing {filteredPayouts.length} payout records.
+              <p className="mt-2 text-sm text-slate-500">
+                Try another status tab, search term, or refresh the page.
               </p>
             </div>
+          ) : (
+            filteredPayouts.map((payout) => {
+              const recipient = getRecipientProfile(payout);
+              const amount = getPayoutAmount(payout);
+              const loadingThis = actionLoadingId === payout.id;
+              const status = normalizeStatus(payout.status);
+              const reviewState = getPayoutReviewState(payout);
+              const approveLoading = loadingThis && actionType === 'APPROVE';
+              const rejectLoading = loadingThis && actionType === 'REJECT';
+              const markPaidLoading = loadingThis && actionType === 'MARK_PAID';
 
-            <div className="max-h-[760px] overflow-y-auto">
-              {filteredPayouts.length === 0 ? (
-                <div className="p-8 text-center">
-                  <HandCoins className="mx-auto mb-3 h-10 w-10 text-slate-300" />
-                  <h3 className="text-sm font-black text-slate-700">
-                    No payout records found
-                  </h3>
-                  <p className="mt-1 text-sm leading-6 text-slate-500">
-                    Try changing the filter or refreshing the page.
-                  </p>
-                </div>
-              ) : (
-                <div className="divide-y divide-slate-100">
-                  {filteredPayouts.map((payout) => {
-                    const recipient = getRecipientProfile(payout);
-                    const selected = selectedPayout?.id === payout.id;
+              return (
+                <article
+                  key={payout.id}
+                  className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm transition hover:border-emerald-200 hover:shadow-md"
+                >
+                  <div className="grid gap-5 p-4 xl:grid-cols-[1fr_300px] xl:items-start">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap gap-2">
+                        <StatusPill status={payout.status} />
+                        <StatusPill status={payout.round?.status} />
+                      </div>
 
-                    return (
-                      <button
-                        key={payout.id}
-                        type="button"
-                        onClick={() => setSelectedPayoutId(payout.id)}
-                        className={`w-full p-4 text-left transition ${
-                          selected
-                            ? 'bg-emerald-50'
-                            : 'bg-white hover:bg-slate-50'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="font-black text-slate-900">
-                              {recipient?.full_name || 'Unknown recipient'}
-                            </p>
-                            <p className="mt-1 text-xs font-semibold text-slate-500">
-                              {maskPhone(recipient?.phone)} •{' '}
-                              {payout.fund_space?.name || 'Fund Space'}
-                            </p>
-                          </div>
-
-                          <StatusPill status={payout.status} />
+                      <div className="mt-3 flex items-start gap-3">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
+                          <UserRound className="h-5 w-5" />
                         </div>
 
-                        <div className="mt-3 flex items-center justify-between">
-                          <p className="text-sm font-black text-emerald-700">
-                            {formatCurrency(getPayoutAmount(payout))}
-                          </p>
+                        <div className="min-w-0">
+                          <h2 className="line-clamp-2 break-words text-base font-black leading-6 text-slate-900">
+                            {recipient?.full_name || 'Unknown recipient'}
+                          </h2>
 
-                          <p className="text-xs font-semibold text-slate-500">
-                            Round {payout.round?.round_number || 'N/A'}
+                          <p className="mt-1 truncate text-sm font-semibold text-slate-500">
+                            {recipient?.phone || 'No phone'} •{' '}
+                            {payout.fund_space?.name || 'Fund Space'}
                           </p>
                         </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
+                      </div>
 
-          <div className="space-y-6">
-            {!selectedPayout ? (
-              <section className="rounded-3xl border border-slate-200 bg-white p-10 text-center shadow-sm">
-                <HandCoins className="mx-auto mb-3 h-12 w-12 text-slate-300" />
-                <h2 className="text-lg font-black text-slate-900">
-                  Select a payout request
-                </h2>
-                <p className="mt-2 text-sm text-slate-500">
-                  Choose a payout from the list to review details, risk, Trust
-                  Shield, and approval actions.
-                </p>
-              </section>
-            ) : (
-              <>
-                <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
-                  <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-                    <div>
-                      <p className="mb-2 inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">
-                        <UserRound className="h-4 w-4" />
-                        Payout Recipient
+                      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                        <CompactInfo
+                          label="Round"
+                          value={
+                            payout.round?.round_number
+                              ? `Round ${payout.round.round_number}`
+                              : 'Not set'
+                          }
+                        />
+                        <CompactInfo label="Net Amount" value={formatCurrency(amount)} />
+                        <CompactInfo
+                          label="Gross Amount"
+                          value={formatCurrency(getGrossAmount(payout))}
+                        />
+                        <CompactInfo
+                          label="Platform Fee"
+                          value={formatCurrency(payout.platform_fee)}
+                        />
+                        <CompactInfo
+                          label="Approved At"
+                          value={formatDateTime(payout.approved_at)}
+                        />
+                        <CompactInfo
+                          label="Paid At"
+                          value={formatDateTime(payout.paid_at)}
+                        />
+                        <CompactInfo label="Method" value={formatLabel(payout.payout_method)} />
+                        <CompactInfo
+                          label="Reference"
+                          value={payout.payout_reference || 'None'}
+                        />
+                      </div>
+
+                      {payout.rejection_reason && (
+                        <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4">
+                          <p className="text-xs font-black uppercase tracking-wide text-red-500">
+                            Rejection Reason
+                          </p>
+                          <p className="mt-2 whitespace-pre-wrap text-sm font-semibold leading-6 text-red-700">
+                            {payout.rejection_reason}
+                          </p>
+                        </div>
+                      )}
+
+                      {payout.failure_reason && (
+                        <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4">
+                          <p className="text-xs font-black uppercase tracking-wide text-red-500">
+                            Failure Reason
+                          </p>
+                          <p className="mt-2 whitespace-pre-wrap text-sm font-semibold leading-6 text-red-700">
+                            {payout.failure_reason}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                      <p className="mb-4 text-sm font-black text-slate-900">
+                        Payout Actions
                       </p>
 
-                      <h2 className="text-2xl font-black text-slate-900">
-                        {getRecipientProfile(selectedPayout)?.full_name ||
-                          'Unknown recipient'}
-                      </h2>
+                      <div className={`mb-4 rounded-2xl border p-4 ${reviewState.className}`}>
+                        <p className="text-sm font-black">{reviewState.title}</p>
+                        <p className="mt-1 text-xs font-semibold leading-5">
+                          {reviewState.description}
+                        </p>
+                      </div>
 
-                      <p className="mt-2 text-sm font-semibold text-slate-500">
-                        {getRecipientProfile(selectedPayout)?.phone ||
-                          'No phone'}{' '}
-                        •{' '}
-                        {getRecipientProfile(selectedPayout)?.email ||
-                          'No email'}
-                      </p>
-
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        <StatusPill status={selectedPayout.status} />
-
-                        <span
-                          className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
-                            getRecipientProfile(selectedPayout)?.verification_status
-                          )}`}
+                      <div className="grid gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPayout(payout)}
+                          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-4 text-sm font-black text-white hover:bg-emerald-800"
                         >
-                          Verification:{' '}
-                          {getReadableStatus(
-                            getRecipientProfile(selectedPayout)
-                              ?.verification_status
+                          <Eye className="h-4 w-4" />
+                          View Details
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={!canApprovePayout(payout) || loadingThis}
+                          onClick={() => handleApprovePayout(payout)}
+                          className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border px-4 text-sm font-black transition disabled:cursor-not-allowed ${
+                            canApprovePayout(payout)
+                              ? 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:opacity-60'
+                              : ['APPROVED', 'APPROVED_FOR_PAYOUT'].includes(status)
+                                ? 'border-blue-200 bg-blue-100 text-blue-800'
+                                : status === 'PAID'
+                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                  : status === 'REJECTED'
+                                    ? 'border-red-200 bg-red-50 text-red-700'
+                                    : 'border-slate-200 bg-slate-200 text-slate-600'
+                          }`}
+                        >
+                          {approveLoading ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <BadgeCheck className="h-4 w-4" />
                           )}
-                        </span>
+                          {getApproveButtonText(status, approveLoading)}
+                        </button>
 
-                        <span
-                          className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
-                            selectedPayout.fund_space?.status
-                          )}`}
+                        <button
+                          type="button"
+                          disabled={!canMarkPaid(payout) || loadingThis}
+                          onClick={() => handleMarkAsPaid(payout)}
+                          className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border px-4 text-sm font-black transition disabled:cursor-not-allowed ${
+                            canMarkPaid(payout)
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-60'
+                              : status === 'PAID'
+                                ? 'border-emerald-200 bg-emerald-100 text-emerald-800'
+                                : ['REJECTED', 'FAILED', 'CANCELLED'].includes(status)
+                                  ? 'border-red-200 bg-red-50 text-red-700'
+                                  : 'border-slate-200 bg-slate-200 text-slate-600'
+                          }`}
                         >
-                          Group:{' '}
-                          {getReadableStatus(selectedPayout.fund_space?.status)}
-                        </span>
+                          {markPaidLoading ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <HandCoins className="h-4 w-4" />
+                          )}
+                          {getMarkPaidButtonText(status, markPaidLoading)}
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={!canRejectPayout(payout) || loadingThis}
+                          onClick={() => {
+                            setRejectPayout(payout);
+                            setRejectReason('');
+                          }}
+                          className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border px-4 text-sm font-black transition disabled:cursor-not-allowed ${
+                            canRejectPayout(payout)
+                              ? 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-60'
+                              : status === 'REJECTED'
+                                ? 'border-red-200 bg-red-100 text-red-800'
+                                : status === 'PAID'
+                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                  : 'border-slate-200 bg-slate-200 text-slate-600'
+                          }`}
+                        >
+                          {rejectLoading ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <XCircle className="h-4 w-4" />
+                          )}
+                          {getRejectButtonText(status, rejectLoading)}
+                        </button>
                       </div>
                     </div>
-
-                    <div className="rounded-3xl border border-emerald-100 bg-emerald-50 p-5 xl:min-w-72">
-                      <p className="text-xs font-black uppercase tracking-wide text-emerald-700">
-                        Net Payout
-                      </p>
-                      <p className="mt-1 text-3xl font-black text-emerald-900">
-                        {formatCurrency(getPayoutAmount(selectedPayout))}
-                      </p>
-                      <p className="mt-2 text-xs font-semibold text-emerald-700">
-                        Gross: {formatCurrency(getGrossAmount(selectedPayout))}{' '}
-                        • Fee:{' '}
-                        {formatCurrency(Number(selectedPayout.platform_fee || 0))}
-                      </p>
-                    </div>
                   </div>
-
-                  <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                    <DetailBox
-                      label="Fund Space"
-                      value={selectedPayout.fund_space?.name || 'Not set'}
-                      icon={<Users className="h-4 w-4" />}
-                    />
-
-                    <DetailBox
-                      label="Round"
-                      value={`Round ${
-                        selectedPayout.round?.round_number || 'N/A'
-                      }`}
-                      icon={<CalendarClock className="h-4 w-4" />}
-                    />
-
-                    <DetailBox
-                      label="Deadline"
-                      value={formatDate(getRoundDueDate(selectedPayout.round))}
-                      icon={<Clock className="h-4 w-4" />}
-                    />
-
-                    <DetailBox
-                      label="Created"
-                      value={formatDateTime(selectedPayout.created_at)}
-                      icon={<CalendarClock className="h-4 w-4" />}
-                    />
-                  </div>
-
-                  <div className="mt-6 grid gap-3 sm:grid-cols-3">
-                    <button
-                      type="button"
-                      disabled={
-                        !fridayApprovalOpen ||
-                        !isPendingPayout(selectedPayout.status) ||
-                        Boolean(actionLoadingId)
-                      }
-                      onClick={() => handleApprovePayout(selectedPayout)}
-                      className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-4 text-sm font-black text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {actionLoadingId === selectedPayout.id &&
-                      actionType === 'APPROVE' ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <CheckCircle2 className="h-4 w-4" />
-                      )}
-                      Approve
-                    </button>
-
-                    <button
-                      type="button"
-                      disabled={
-                        !canMarkPaid(selectedPayout.status) ||
-                        Boolean(actionLoadingId)
-                      }
-                      onClick={() => handleMarkAsPaid(selectedPayout)}
-                      className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 text-sm font-black text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {actionLoadingId === selectedPayout.id &&
-                      actionType === 'MARK_PAID' ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <HandCoins className="h-4 w-4" />
-                      )}
-                      Mark Paid
-                    </button>
-
-                    <button
-                      type="button"
-                      disabled={
-                        !isPendingPayout(selectedPayout.status) ||
-                        Boolean(actionLoadingId)
-                      }
-                      onClick={() => {
-                        setRejectPayoutId(selectedPayout.id);
-                        setRejectReason('');
-                      }}
-                      className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 text-sm font-black text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <XCircle className="h-4 w-4" />
-                      Reject
-                    </button>
-                  </div>
-                </section>
-
-                <PayoutRiskCard payoutId={selectedPayout.id} />
-
-                <TrustShieldCard
-                  userId={getPayoutUserId(selectedPayout)}
-                  title="Recipient Trust Shield"
-                  subtitle="This recipient’s TrustPoint reliability profile before payout approval."
-                />
-
-                <ApprovalGuidanceCard
-                  fridayApprovalOpen={fridayApprovalOpen}
-                  ghanaWeekday={ghanaWeekday}
-                  selectedPayout={selectedPayout}
-                />
-
-                <PaymentCard selectedPayout={selectedPayout} />
-
-                <section className="rounded-3xl border border-blue-200 bg-blue-50 p-5 text-blue-800 shadow-sm">
-                  <div className="flex items-start gap-3">
-                    <ShieldCheck className="mt-1 h-5 w-5 shrink-0" />
-                    <div>
-                      <h3 className="font-black">Final admin checklist</h3>
-                      <ul className="mt-3 space-y-2 text-sm font-semibold leading-6">
-                        <li>• Check the Smart Payout Risk result.</li>
-                        <li>• Confirm the recipient Trust Shield score.</li>
-                        <li>• Confirm the payout amount and payout recipient.</li>
-                        <li>• Confirm Mobile Money or bank details before paying.</li>
-                        <li>• Approve first, then mark paid after real payment is done.</li>
-                      </ul>
-                    </div>
-                  </div>
-                </section>
-              </>
-            )}
-          </div>
+                </article>
+              );
+            })
+          )}
         </section>
       </div>
 
-      {rejectPayoutId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-lg rounded-3xl bg-white p-5 shadow-xl">
+      {selectedPayout && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-3 py-4">
+          <div className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+            <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-5 py-4">
+              <div className="min-w-0">
+                <h2 className="text-lg font-black text-slate-900">
+                  Payout Details
+                </h2>
+                <p className="mt-1 truncate text-sm text-slate-500">
+                  {getRecipientProfile(selectedPayout)?.full_name || 'Unknown recipient'}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSelectedPayout(null)}
+                className="rounded-2xl p-2 text-slate-500 hover:bg-slate-100"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-5">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <CompactInfo
+                  label="Recipient"
+                  value={getRecipientProfile(selectedPayout)?.full_name || 'Unknown'}
+                />
+                <CompactInfo
+                  label="Phone"
+                  value={getRecipientProfile(selectedPayout)?.phone || 'No phone'}
+                />
+                <CompactInfo
+                  label="MoMo Number"
+                  value={getRecipientProfile(selectedPayout)?.momo_number || 'Not set'}
+                />
+                <CompactInfo
+                  label="Verification"
+                  value={formatLabel(
+                    getRecipientProfile(selectedPayout)?.verification_status
+                  )}
+                />
+                <CompactInfo
+                  label="Fund Space"
+                  value={selectedPayout.fund_space?.name || 'Not set'}
+                />
+                <CompactInfo
+                  label="Round"
+                  value={
+                    selectedPayout.round?.round_number
+                      ? `Round ${selectedPayout.round.round_number}`
+                      : 'Not set'
+                  }
+                />
+                <CompactInfo
+                  label="Payout Status"
+                  value={formatLabel(selectedPayout.status)}
+                />
+                <CompactInfo
+                  label="Round Status"
+                  value={formatLabel(selectedPayout.round?.status)}
+                />
+                <CompactInfo
+                  label="Gross Amount"
+                  value={formatCurrency(getGrossAmount(selectedPayout))}
+                />
+                <CompactInfo
+                  label="Platform Fee"
+                  value={formatCurrency(selectedPayout.platform_fee)}
+                />
+                <CompactInfo
+                  label="Net Amount"
+                  value={formatCurrency(getPayoutAmount(selectedPayout))}
+                />
+                <CompactInfo
+                  label="Method"
+                  value={formatLabel(selectedPayout.payout_method)}
+                />
+                <CompactInfo
+                  label="Reference"
+                  value={selectedPayout.payout_reference || 'None'}
+                />
+                <CompactInfo
+                  label="Approved At"
+                  value={formatDateTime(selectedPayout.approved_at)}
+                />
+                <CompactInfo
+                  label="Paid At"
+                  value={formatDateTime(selectedPayout.paid_at)}
+                />
+                <CompactInfo
+                  label="Created"
+                  value={formatDate(selectedPayout.created_at)}
+                />
+              </div>
+
+              {selectedPayout.rejection_reason && (
+                <div className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-4">
+                  <p className="text-xs font-black uppercase tracking-wide text-red-500">
+                    Rejection Reason
+                  </p>
+                  <p className="mt-2 whitespace-pre-wrap break-words text-sm font-semibold leading-6 text-red-700">
+                    {selectedPayout.rejection_reason}
+                  </p>
+                </div>
+              )}
+
+              {selectedPayout.failure_reason && (
+                <div className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-4">
+                  <p className="text-xs font-black uppercase tracking-wide text-red-500">
+                    Failure Reason
+                  </p>
+                  <p className="mt-2 whitespace-pre-wrap break-words text-sm font-semibold leading-6 text-red-700">
+                    {selectedPayout.failure_reason}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {rejectPayout && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-3 py-4">
+          <div className="w-full max-w-lg rounded-3xl bg-white p-5 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-black text-slate-900">
+              <div className="min-w-0">
+                <h2 className="text-lg font-black text-slate-900">
                   Reject Payout
                 </h2>
-                <p className="mt-1 text-sm leading-6 text-slate-500">
-                  Enter a clear reason. This reason may be saved for audit and
-                  notification purposes.
+                <p className="mt-1 text-sm text-slate-500">
+                  Give a clear reason for rejecting this payout.
                 </p>
               </div>
 
               <button
                 type="button"
                 onClick={() => {
-                  setRejectPayoutId(null);
+                  setRejectPayout(null);
                   setRejectReason('');
                 }}
                 className="rounded-2xl p-2 text-slate-500 hover:bg-slate-100"
@@ -1369,18 +1556,18 @@ export default function AdminPayoutsPage() {
               value={rejectReason}
               onChange={(event) => setRejectReason(event.target.value)}
               rows={5}
-              placeholder="Example: Recipient has unresolved payment issue or payout details are not confirmed."
-              className="mt-5 w-full rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-semibold outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
+              placeholder="Example: Recipient payout details are not confirmed."
+              className="mt-5 w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-semibold outline-none focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
             />
 
-            <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:justify-end">
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
               <button
                 type="button"
                 onClick={() => {
-                  setRejectPayoutId(null);
+                  setRejectPayout(null);
                   setRejectReason('');
                 }}
-                className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-slate-200 px-4 text-sm font-black text-slate-700 hover:bg-slate-50"
+                className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 hover:bg-slate-50"
               >
                 Cancel
               </button>

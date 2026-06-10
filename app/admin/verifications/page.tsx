@@ -1,8 +1,12 @@
-"use client";
+'use client';
 
-import { useEffect, useMemo, useState } from "react";
+import Link from 'next/link';
+import type { ReactNode } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
-  AlertTriangle,
+  AlertCircle,
+  ArrowLeft,
   BadgeCheck,
   Briefcase,
   Calendar,
@@ -23,15 +27,16 @@ import {
   User,
   X,
   XCircle,
-} from "lucide-react";
-import { supabase } from "@/lib/supabase/client";
+} from 'lucide-react';
+
+import { supabase } from '@/lib/supabase/client';
 
 type VerificationStatus =
-  | "ALL"
-  | "PENDING"
-  | "RESUBMITTED"
-  | "APPROVED"
-  | "REJECTED";
+  | 'ALL'
+  | 'PENDING'
+  | 'RESUBMITTED'
+  | 'APPROVED'
+  | 'REJECTED';
 
 type RelatedProfile = {
   id: string;
@@ -104,52 +109,224 @@ type Pagination = {
   totalPages: number;
 };
 
-const statusTabs: { label: string; value: VerificationStatus }[] = [
-  { label: "Pending", value: "PENDING" },
-  { label: "Resubmitted", value: "RESUBMITTED" },
-  { label: "Approved", value: "APPROVED" },
-  { label: "Rejected", value: "REJECTED" },
-  { label: "All", value: "ALL" },
+type StatCardItem = {
+  title: string;
+  value: string | number;
+  helper: string;
+  href: string;
+  status: VerificationStatus;
+  icon: ReactNode;
+};
+
+const defaultStats: Stats = {
+  all: 0,
+  pending: 0,
+  resubmitted: 0,
+  approved: 0,
+  rejected: 0,
+};
+
+const statusTabs: { label: string; value: VerificationStatus; href: string }[] = [
+  {
+    label: 'Pending',
+    value: 'PENDING',
+    href: '/admin/verifications?status=PENDING',
+  },
+  {
+    label: 'Resubmitted',
+    value: 'RESUBMITTED',
+    href: '/admin/verifications?status=RESUBMITTED',
+  },
+  {
+    label: 'Approved',
+    value: 'APPROVED',
+    href: '/admin/verifications?status=APPROVED',
+  },
+  {
+    label: 'Rejected',
+    value: 'REJECTED',
+    href: '/admin/verifications?status=REJECTED',
+  },
+  {
+    label: 'All',
+    value: 'ALL',
+    href: '/admin/verifications?status=ALL',
+  },
 ];
 
-function formatDate(date?: string | null) {
-  if (!date) return "Not provided";
+function normalize(value: string | null | undefined) {
+  return String(value || '').trim().toUpperCase();
+}
 
-  return new Intl.DateTimeFormat("en-GH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  }).format(new Date(date));
+function formatDate(date?: string | null) {
+  if (!date) return 'Not provided';
+
+  const parsedDate = new Date(date);
+
+  if (Number.isNaN(parsedDate.getTime())) return 'Invalid date';
+
+  return new Intl.DateTimeFormat('en-GH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }).format(parsedDate);
 }
 
 function formatDateTime(date?: string | null) {
-  if (!date) return "Not provided";
+  if (!date) return 'Not provided';
 
-  return new Intl.DateTimeFormat("en-GH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(date));
+  const parsedDate = new Date(date);
+
+  if (Number.isNaN(parsedDate.getTime())) return 'Invalid date';
+
+  return new Intl.DateTimeFormat('en-GH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(parsedDate);
+}
+
+function formatLabel(value?: string | null) {
+  if (!value) return 'Not provided';
+
+  return value
+    .replaceAll('_', ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function getStatusBadge(status?: string | null) {
-  if (status === "APPROVED") {
-    return "bg-green-100 text-green-700 border-green-200";
+  const value = normalize(status);
+
+  if (value === 'APPROVED') {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700';
   }
 
-  if (status === "REJECTED") {
-    return "bg-red-100 text-red-700 border-red-200";
+  if (value === 'REJECTED') {
+    return 'border-red-200 bg-red-50 text-red-700';
   }
 
-  return "bg-yellow-100 text-yellow-700 border-yellow-200";
+  if (value === 'RESUBMITTED') {
+    return 'border-blue-200 bg-blue-50 text-blue-700';
+  }
+
+  return 'border-amber-200 bg-amber-50 text-amber-700';
 }
 
 function getStatusIcon(status?: string | null) {
-  if (status === "APPROVED") return <ShieldCheck className="h-4 w-4" />;
-  if (status === "REJECTED") return <ShieldX className="h-4 w-4" />;
-  return <AlertTriangle className="h-4 w-4" />;
+  const value = normalize(status);
+
+  if (value === 'APPROVED') return <ShieldCheck className="h-4 w-4" />;
+  if (value === 'REJECTED') return <ShieldX className="h-4 w-4" />;
+
+  return <ShieldAlert className="h-4 w-4" />;
+}
+
+function getReviewState(request: VerificationRequest) {
+  const status = normalize(request.status);
+
+  if (status === 'APPROVED') {
+    return {
+      title: 'Verification Approved',
+      description:
+        'This customer verification has already been approved. No further approval action is required.',
+      className: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+    };
+  }
+
+  if (status === 'REJECTED') {
+    return {
+      title: 'Verification Rejected',
+      description:
+        request.rejection_reason ||
+        'This verification request was rejected. Check the reason before taking any further action.',
+      className: 'border-red-200 bg-red-50 text-red-800',
+    };
+  }
+
+  if (request.is_resubmitted || status === 'RESUBMITTED') {
+    return {
+      title: 'Resubmitted for Review',
+      description:
+        'This customer has resubmitted documents. Review the latest details carefully before approving.',
+      className: 'border-blue-200 bg-blue-50 text-blue-800',
+    };
+  }
+
+  return {
+    title: 'Pending Admin Review',
+    description:
+      'This verification request is waiting for admin approval or rejection.',
+    className: 'border-amber-200 bg-amber-50 text-amber-800',
+  };
+}
+
+function canApproveRequest(request: VerificationRequest) {
+  const status = normalize(request.status);
+  return status !== 'APPROVED';
+}
+
+function canRejectRequest(request: VerificationRequest) {
+  const status = normalize(request.status);
+  return status !== 'REJECTED';
+}
+
+function getApproveButtonText(request: VerificationRequest, loading: boolean) {
+  const status = normalize(request.status);
+
+  if (loading) return 'Approving...';
+  if (status === 'APPROVED') return 'Verification Approved';
+  if (status === 'REJECTED') return 'Approve After Rejection';
+
+  if (request.is_resubmitted || status === 'RESUBMITTED') {
+    return 'Approve Resubmission';
+  }
+
+  return 'Approve Request';
+}
+
+function getRejectButtonText(request: VerificationRequest, loading: boolean) {
+  const status = normalize(request.status);
+
+  if (loading) return 'Rejecting...';
+  if (status === 'APPROVED') return 'Reject Approved Request';
+  if (status === 'REJECTED') return 'Verification Rejected';
+
+  if (request.is_resubmitted || status === 'RESUBMITTED') {
+    return 'Reject Resubmission';
+  }
+
+  return 'Reject Request';
+}
+
+function getApproveButtonClass(request: VerificationRequest) {
+  const status = normalize(request.status);
+
+  if (status === 'APPROVED') {
+    return 'bg-emerald-100 text-emerald-800';
+  }
+
+  if (status === 'REJECTED') {
+    return 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60';
+  }
+
+  return 'bg-emerald-700 text-white hover:bg-emerald-800 disabled:opacity-60';
+}
+
+function getRejectButtonClass(request: VerificationRequest) {
+  const status = normalize(request.status);
+
+  if (status === 'REJECTED') {
+    return 'border-red-200 bg-red-100 text-red-800';
+  }
+
+  if (status === 'APPROVED') {
+    return 'border-slate-200 bg-slate-200 text-slate-600';
+  }
+
+  return 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-60';
 }
 
 function InfoRow({
@@ -157,34 +334,91 @@ function InfoRow({
   label,
   value,
 }: {
-  icon: React.ReactNode;
+  icon: ReactNode;
   label: string;
   value?: string | number | null;
 }) {
   return (
-    <div className="flex items-start gap-3 rounded-xl border border-gray-100 bg-gray-50 p-3">
-      <div className="mt-0.5 text-gray-500">{icon}</div>
-      <div>
-        <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+    <div className="flex min-w-0 items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+      <div className="mt-0.5 shrink-0 text-slate-500">{icon}</div>
+
+      <div className="min-w-0">
+        <p className="text-[11px] font-black uppercase tracking-wide text-slate-400">
           {label}
         </p>
-        <p className="mt-1 text-sm font-semibold text-gray-900">
-          {value || "Not provided"}
+
+        <p className="mt-1 break-words text-sm font-bold text-slate-900">
+          {value || 'Not provided'}
         </p>
       </div>
     </div>
   );
 }
 
+function StatCard({ item, active }: { item: StatCardItem; active: boolean }) {
+  return (
+    <Link
+      href={item.href}
+      className={`group min-w-0 rounded-2xl border border-white/70 bg-white/10 p-4 text-white transition hover:-translate-y-0.5 hover:bg-white/20 hover:shadow-lg ${
+        active ? 'bg-white/20 ring-2 ring-white/40' : ''
+      }`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <p className="truncate text-[11px] font-black uppercase tracking-wide text-emerald-50/90">
+          {item.title}
+        </p>
+
+        <span className="text-emerald-50/90 transition group-hover:translate-x-0.5">
+          {item.icon}
+        </span>
+      </div>
+
+      <p className="mt-2 truncate text-2xl font-black text-white md:text-3xl">
+        {item.value}
+      </p>
+
+      <p className="mt-1 truncate text-xs font-semibold text-emerald-50/80">
+        {item.helper}
+      </p>
+    </Link>
+  );
+}
+
+function MessageBox({
+  type,
+  message,
+}: {
+  type: 'success' | 'error';
+  message: string;
+}) {
+  const isSuccess = type === 'success';
+
+  return (
+    <div
+      className={`rounded-3xl border p-5 ${
+        isSuccess
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          : 'border-red-200 bg-red-50 text-red-700'
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        {isSuccess ? (
+          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
+        ) : (
+          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+        )}
+
+        <p className="text-sm font-bold leading-6">{message}</p>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminVerificationsPage() {
+  const searchParams = useSearchParams();
+
   const [requests, setRequests] = useState<VerificationRequest[]>([]);
-  const [stats, setStats] = useState<Stats>({
-    all: 0,
-    pending: 0,
-    resubmitted: 0,
-    approved: 0,
-    rejected: 0,
-  });
+  const [stats, setStats] = useState<Stats>(defaultStats);
 
   const [pagination, setPagination] = useState<Pagination>({
     page: 1,
@@ -194,56 +428,114 @@ export default function AdminVerificationsPage() {
   });
 
   const [selectedStatus, setSelectedStatus] =
-    useState<VerificationStatus>("PENDING");
-  const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch] = useState("");
+    useState<VerificationStatus>('PENDING');
+
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
 
   const [selectedRequest, setSelectedRequest] =
     useState<VerificationRequest | null>(null);
 
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
-  const [rejectionReason, setRejectionReason] = useState("");
+  const [rejectionReason, setRejectionReason] = useState('');
 
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [successMessage, setSuccessMessage] = useState("");
+  const [actionTargetId, setActionTargetId] = useState('');
+  const [actionType, setActionType] = useState<'APPROVE' | 'REJECT' | ''>('');
+  const [error, setError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+
+  useEffect(() => {
+    const urlStatus = normalize(searchParams.get('status'));
+
+    if (
+      ['ALL', 'PENDING', 'RESUBMITTED', 'APPROVED', 'REJECTED'].includes(
+        urlStatus
+      )
+    ) {
+      setSelectedStatus(urlStatus as VerificationStatus);
+    }
+  }, [searchParams]);
 
   const selectedDocuments = useMemo(() => {
     if (!selectedRequest) return [];
 
     return [
       {
-        label: "Ghana Card Front",
+        label: 'Ghana Card Front',
         url: selectedRequest.ghana_card_front_signed_url,
       },
       {
-        label: "Ghana Card Back",
+        label: 'Ghana Card Back',
         url: selectedRequest.ghana_card_back_signed_url,
       },
       {
-        label: "Selfie / Passport Photo",
+        label: 'Selfie / Passport Photo',
         url: selectedRequest.selfie_signed_url,
       },
       {
-        label: "Employment Proof",
+        label: 'Employment Proof',
         url: selectedRequest.employment_proof_signed_url,
       },
       {
-        label: "Business Proof",
+        label: 'Business Proof',
         url: selectedRequest.business_proof_signed_url,
       },
     ];
   }, [selectedRequest]);
 
+  const statCards: StatCardItem[] = [
+    {
+      title: 'Pending',
+      value: stats.pending,
+      helper: 'Needs admin review',
+      href: '/admin/verifications?status=PENDING',
+      status: 'PENDING',
+      icon: <ShieldAlert className="h-4 w-4" />,
+    },
+    {
+      title: 'Resubmitted',
+      value: stats.resubmitted,
+      helper: 'Returned for review',
+      href: '/admin/verifications?status=RESUBMITTED',
+      status: 'RESUBMITTED',
+      icon: <RefreshCw className="h-4 w-4" />,
+    },
+    {
+      title: 'Approved',
+      value: stats.approved,
+      helper: 'Trusted customers',
+      href: '/admin/verifications?status=APPROVED',
+      status: 'APPROVED',
+      icon: <ShieldCheck className="h-4 w-4" />,
+    },
+    {
+      title: 'Rejected',
+      value: stats.rejected,
+      helper: 'Needs correction',
+      href: '/admin/verifications?status=REJECTED',
+      status: 'REJECTED',
+      icon: <ShieldX className="h-4 w-4" />,
+    },
+    {
+      title: 'All Requests',
+      value: stats.all,
+      helper: 'Every KYC request',
+      href: '/admin/verifications?status=ALL',
+      status: 'ALL',
+      icon: <BadgeCheck className="h-4 w-4" />,
+    },
+  ];
+
   async function getAuthToken() {
     const {
       data: { session },
-      error,
+      error: sessionError,
     } = await supabase.auth.getSession();
 
-    if (error || !session?.access_token) {
-      throw new Error("You are not logged in. Please log in again.");
+    if (sessionError || !session?.access_token) {
+      throw new Error('You are not logged in. Please log in again.');
     }
 
     return session.access_token;
@@ -252,8 +544,8 @@ export default function AdminVerificationsPage() {
   async function fetchRequests(page = 1) {
     try {
       setLoading(true);
-      setError("");
-      setSuccessMessage("");
+      setError('');
+      setSuccessMessage('');
 
       const token = await getAuthToken();
 
@@ -265,7 +557,7 @@ export default function AdminVerificationsPage() {
       });
 
       const response = await fetch(`/api/admin/verifications?${params}`, {
-        method: "GET",
+        method: 'GET',
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -276,20 +568,12 @@ export default function AdminVerificationsPage() {
 
       if (!response.ok || !result?.success) {
         throw new Error(
-          result?.message || "Failed to load verification requests."
+          result?.message || 'Failed to load verification requests.'
         );
       }
 
       setRequests(result.requests || []);
-      setStats(
-        result.stats || {
-          all: 0,
-          pending: 0,
-          resubmitted: 0,
-          approved: 0,
-          rejected: 0,
-        }
-      );
+      setStats(result.stats || defaultStats);
       setPagination(
         result.pagination || {
           page,
@@ -298,8 +582,8 @@ export default function AdminVerificationsPage() {
           totalPages: 1,
         }
       );
-    } catch (err: any) {
-      setError(err?.message || "Something went wrong.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong.');
     } finally {
       setLoading(false);
     }
@@ -307,25 +591,27 @@ export default function AdminVerificationsPage() {
 
   async function handleAction(
     requestId: string,
-    action: "APPROVE" | "REJECT",
+    action: 'APPROVE' | 'REJECT',
     reason?: string
   ) {
     try {
       setActionLoading(true);
-      setError("");
-      setSuccessMessage("");
+      setActionTargetId(requestId);
+      setActionType(action);
+      setError('');
+      setSuccessMessage('');
 
       const token = await getAuthToken();
 
       const response = await fetch(`/api/admin/verifications/${requestId}`, {
-        method: "PATCH",
+        method: 'PATCH',
         headers: {
           Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
+          'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           action,
-          reason: reason || "",
+          reason: reason || '',
         }),
       });
 
@@ -334,20 +620,22 @@ export default function AdminVerificationsPage() {
 
       if (!response.ok || !result?.success) {
         throw new Error(
-          result?.message || "Failed to update verification request."
+          result?.message || 'Failed to update verification request.'
         );
       }
 
-      setSuccessMessage(result.message || "Verification updated successfully.");
+      setSuccessMessage(result.message || 'Verification updated successfully.');
       setSelectedRequest(null);
       setRejectModalOpen(false);
-      setRejectionReason("");
+      setRejectionReason('');
 
       await fetchRequests(pagination.page);
-    } catch (err: any) {
-      setError(err?.message || "Something went wrong.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong.');
     } finally {
       setActionLoading(false);
+      setActionTargetId('');
+      setActionType('');
     }
   }
 
@@ -362,267 +650,362 @@ export default function AdminVerificationsPage() {
   }, [selectedStatus, search]);
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 md:p-8">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <div className="flex flex-col justify-between gap-4 rounded-2xl bg-white p-6 shadow-sm md:flex-row md:items-center">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">
-              TrustPoint Fund Space
-            </p>
-            <h1 className="mt-1 text-2xl font-bold text-gray-900">
-              Customer Verification
-            </h1>
-            <p className="mt-2 max-w-2xl text-sm text-gray-600">
-              Review pending customer verification requests, inspect their KYC
-              documents, and approve or reject them.
-            </p>
-          </div>
+    <main className="min-h-screen bg-slate-50 px-4 py-5 md:px-8">
+      <div className="mx-auto max-w-7xl space-y-5">
+        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+          <Link
+            href="/admin"
+            className="inline-flex min-h-11 w-fit items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-100"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to Admin Control Center
+          </Link>
 
           <button
+            type="button"
             onClick={() => fetchRequests(pagination.page)}
             disabled={loading}
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
         </div>
 
-        {error && (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-700">
-            {error}
-          </div>
-        )}
+        <section className="overflow-hidden rounded-[2rem] bg-gradient-to-br from-emerald-950 via-emerald-900 to-emerald-800 text-white shadow-sm">
+          <div className="p-5 md:p-8">
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0">
+                <p className="inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-2 text-xs font-black">
+                  <ShieldCheck className="h-4 w-4" />
+                  Admin Customer Verification
+                </p>
 
-        {successMessage && (
-          <div className="rounded-2xl border border-green-200 bg-green-50 p-4 text-sm font-medium text-green-700">
-            {successMessage}
-          </div>
-        )}
+                <h1 className="mt-5 text-3xl font-black tracking-tight md:text-5xl">
+                  Customer Verification Review
+                </h1>
 
-        <div className="grid gap-4 md:grid-cols-5">
-          <div className="rounded-2xl bg-white p-5 shadow-sm">
-            <p className="text-sm text-gray-500">Pending</p>
-            <p className="mt-2 text-2xl font-bold text-yellow-600">
-              {stats.pending}
-            </p>
-          </div>
+                <p className="mt-4 max-w-3xl text-sm font-semibold leading-7 text-emerald-50 md:text-base">
+                  Review customer KYC documents, inspect ID images, check
+                  agent-submitted details, and approve only trusted customers.
+                </p>
+              </div>
 
-          <div className="rounded-2xl bg-white p-5 shadow-sm">
-            <p className="text-sm text-gray-500">Resubmitted</p>
-            <p className="mt-2 text-2xl font-bold text-blue-600">
-              {stats.resubmitted}
-            </p>
-          </div>
-
-          <div className="rounded-2xl bg-white p-5 shadow-sm">
-            <p className="text-sm text-gray-500">Approved</p>
-            <p className="mt-2 text-2xl font-bold text-green-600">
-              {stats.approved}
-            </p>
-          </div>
-
-          <div className="rounded-2xl bg-white p-5 shadow-sm">
-            <p className="text-sm text-gray-500">Rejected</p>
-            <p className="mt-2 text-2xl font-bold text-red-600">
-              {stats.rejected}
-            </p>
-          </div>
-
-          <div className="rounded-2xl bg-white p-5 shadow-sm">
-            <p className="text-sm text-gray-500">All Requests</p>
-            <p className="mt-2 text-2xl font-bold text-gray-900">
-              {stats.all}
-            </p>
-          </div>
-        </div>
-
-        <div className="rounded-2xl bg-white p-4 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex flex-wrap gap-2">
-              {statusTabs.map((tab) => (
-                <button
-                  key={tab.value}
-                  onClick={() => setSelectedStatus(tab.value)}
-                  className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
-                    selectedStatus === tab.value
-                      ? "bg-blue-600 text-white shadow-sm"
-                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                  }`}
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  href="/admin/fund-space"
+                  className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-white/25 bg-white/10 px-4 text-xs font-black text-white ring-1 ring-white/10 transition hover:bg-white/20"
                 >
-                  {tab.label}
+                  Fund Space
+                </Link>
+
+                <Link
+                  href="/admin/manual-payment-submissions"
+                  className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-white/25 bg-white/10 px-4 text-xs font-black text-white ring-1 ring-white/10 transition hover:bg-white/20"
+                >
+                  MoMo Reviews
+                </Link>
+
+                <button
+                  type="button"
+                  onClick={() => fetchRequests(pagination.page)}
+                  disabled={loading}
+                  className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full bg-white px-4 text-xs font-black text-emerald-900 transition hover:bg-emerald-50 disabled:opacity-60"
+                >
+                  <RefreshCw
+                    className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`}
+                  />
+                  Refresh
                 </button>
-              ))}
+              </div>
             </div>
 
+            <div className="mt-7 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+              {statCards.map((item) => (
+                <StatCard
+                  key={item.title}
+                  item={item}
+                  active={selectedStatus === item.status}
+                />
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {error && <MessageBox type="error" message={error} />}
+        {successMessage && (
+          <MessageBox type="success" message={successMessage} />
+        )}
+
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
             <form
               onSubmit={handleSearchSubmit}
-              className="flex w-full gap-2 lg:w-96"
+              className="grid gap-2 sm:grid-cols-[1fr_auto]"
             >
-              <div className="relative flex-1">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
                 <input
                   value={searchInput}
                   onChange={(event) => setSearchInput(event.target.value)}
                   placeholder="Search name, phone, Ghana Card..."
-                  className="w-full rounded-xl border border-gray-200 bg-white py-2 pl-10 pr-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                  className="min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-sm font-semibold outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                 />
               </div>
 
               <button
                 type="submit"
-                className="rounded-xl bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-gray-800"
+                className="min-h-12 rounded-2xl bg-slate-900 px-5 text-sm font-black text-white transition hover:bg-slate-800"
               >
                 Search
               </button>
             </form>
-          </div>
-        </div>
 
-        <div className="overflow-hidden rounded-2xl bg-white shadow-sm">
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {statusTabs.map((tab) => (
+                <Link
+                  key={tab.value}
+                  href={tab.href}
+                  className={`shrink-0 rounded-2xl px-4 py-3 text-xs font-black transition ${
+                    selectedStatus === tab.value
+                      ? 'bg-emerald-700 text-white'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  {tab.label}
+                </Link>
+              ))}
+            </div>
+          </div>
+
+          <p className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-600">
+            Showing page {pagination.page} of {pagination.totalPages || 1}.{' '}
+            {pagination.total} total records.
+          </p>
+        </section>
+
+        <section className="space-y-4">
           {loading ? (
-            <div className="flex min-h-72 items-center justify-center">
-              <div className="flex items-center gap-3 text-gray-600">
+            <div className="flex min-h-72 items-center justify-center rounded-3xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex items-center gap-3 text-slate-600">
                 <Loader2 className="h-5 w-5 animate-spin" />
                 Loading verification requests...
               </div>
             </div>
           ) : requests.length === 0 ? (
-            <div className="flex min-h-72 flex-col items-center justify-center p-8 text-center">
-              <ShieldCheck className="h-12 w-12 text-gray-300" />
-              <h3 className="mt-4 text-lg font-bold text-gray-900">
+            <div className="flex min-h-72 flex-col items-center justify-center rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+              <ShieldCheck className="h-12 w-12 text-slate-300" />
+
+              <h3 className="mt-4 text-lg font-black text-slate-900">
                 No verification requests found
               </h3>
-              <p className="mt-2 max-w-md text-sm text-gray-500">
+
+              <p className="mt-2 max-w-md text-sm text-slate-500">
                 There are no requests matching the selected status or search
                 term.
               </p>
             </div>
           ) : (
-            <div className="divide-y divide-gray-100">
-              {requests.map((request) => (
-                <div
+            requests.map((request) => {
+              const reviewState = getReviewState(request);
+
+              const approvingThis =
+                actionLoading &&
+                actionTargetId === request.id &&
+                actionType === 'APPROVE';
+
+              const rejectingThis =
+                actionLoading &&
+                actionTargetId === request.id &&
+                actionType === 'REJECT';
+
+              return (
+                <article
                   key={request.id}
-                  className="flex flex-col gap-4 p-5 transition hover:bg-gray-50 lg:flex-row lg:items-center lg:justify-between"
+                  className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-emerald-200 hover:shadow-md"
                 >
-                  <div className="flex gap-4">
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
-                      <User className="h-6 w-6" />
+                  <div className="grid gap-5 xl:grid-cols-[1fr_280px]">
+                    <div className="min-w-0">
+                      <div className="flex gap-4">
+                        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
+                          <User className="h-6 w-6" />
+                        </div>
+
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="break-words text-base font-black text-slate-900">
+                              {request.full_name || 'Unnamed Customer'}
+                            </h3>
+
+                            <span
+                              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-black ${getStatusBadge(
+                                request.status
+                              )}`}
+                            >
+                              {getStatusIcon(request.status)}
+                              {formatLabel(request.status || 'PENDING')}
+                            </span>
+
+                            {request.is_resubmitted && (
+                              <span className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-black text-blue-700">
+                                <RefreshCw className="h-3.5 w-3.5" />
+                                Resubmitted
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm font-semibold text-slate-600">
+                            <span className="inline-flex items-center gap-1">
+                              <Phone className="h-4 w-4" />
+                              {request.phone || 'No phone'}
+                            </span>
+
+                            <span className="inline-flex items-center gap-1">
+                              <MapPin className="h-4 w-4" />
+                              {[request.city, request.region, request.country]
+                                .filter(Boolean)
+                                .join(', ') || 'No location'}
+                            </span>
+
+                            <span className="inline-flex items-center gap-1">
+                              <FileText className="h-4 w-4" />
+                              {request.ghana_card_number || 'No Ghana Card'}
+                            </span>
+                          </div>
+
+                          <p className="mt-3 text-sm font-semibold text-slate-500">
+                            Submitted by:{' '}
+                            <span className="font-black text-slate-700">
+                              {request.submitted_by_agent_profile?.full_name ||
+                                'Not provided'}
+                            </span>{' '}
+                            • {formatDate(request.created_at)}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                        <InfoRow
+                          icon={<Phone className="h-4 w-4" />}
+                          label="Phone"
+                          value={request.phone}
+                        />
+
+                        <InfoRow
+                          icon={<Mail className="h-4 w-4" />}
+                          label="Email"
+                          value={request.email}
+                        />
+
+                        <InfoRow
+                          icon={<BadgeCheck className="h-4 w-4" />}
+                          label="Category"
+                          value={formatLabel(request.user_category)}
+                        />
+
+                        <InfoRow
+                          icon={<Calendar className="h-4 w-4" />}
+                          label="Submitted"
+                          value={formatDate(request.created_at)}
+                        />
+                      </div>
                     </div>
 
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-base font-bold text-gray-900">
-                          {request.full_name || "Unnamed Customer"}
-                        </h3>
+                    <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                      <p className="mb-4 text-sm font-black text-slate-900">
+                        Verification Actions
+                      </p>
 
-                        <span
-                          className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-bold ${getStatusBadge(
-                            request.status
+                      <div
+                        className={`mb-4 rounded-2xl border p-4 ${reviewState.className}`}
+                      >
+                        <p className="text-sm font-black">
+                          {reviewState.title}
+                        </p>
+
+                        <p className="mt-1 text-xs font-semibold leading-5">
+                          {reviewState.description}
+                        </p>
+                      </div>
+
+                      <div className="grid gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedRequest(request)}
+                          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 hover:bg-slate-50"
+                        >
+                          <Eye className="h-4 w-4" />
+                          Review Details
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleAction(request.id, 'APPROVE')}
+                          disabled={!canApproveRequest(request) || actionLoading}
+                          className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl px-4 text-sm font-black transition disabled:cursor-not-allowed ${getApproveButtonClass(
+                            request
                           )}`}
                         >
-                          {getStatusIcon(request.status)}
-                          {request.status || "PENDING"}
-                        </span>
+                          {approvingThis ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <CheckCircle2 className="h-4 w-4" />
+                          )}
 
-                        {request.is_resubmitted && (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700">
-                            <RefreshCw className="h-3.5 w-3.5" />
-                            RESUBMITTED
-                          </span>
-                        )}
-                      </div>
+                          {getApproveButtonText(request, approvingThis)}
+                        </button>
 
-                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-sm text-gray-600">
-                        <span className="inline-flex items-center gap-1">
-                          <Phone className="h-4 w-4" />
-                          {request.phone || "No phone"}
-                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedRequest(request);
+                            setRejectionReason('');
+                            setRejectModalOpen(true);
+                          }}
+                          disabled={!canRejectRequest(request) || actionLoading}
+                          className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border px-4 text-sm font-black transition disabled:cursor-not-allowed ${getRejectButtonClass(
+                            request
+                          )}`}
+                        >
+                          {rejectingThis ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <XCircle className="h-4 w-4" />
+                          )}
 
-                        <span className="inline-flex items-center gap-1">
-                          <MapPin className="h-4 w-4" />
-                          {[request.city, request.region, request.country]
-                            .filter(Boolean)
-                            .join(", ") || "No location"}
-                        </span>
-
-                        <span className="inline-flex items-center gap-1">
-                          <FileText className="h-4 w-4" />
-                          {request.ghana_card_number || "No Ghana Card"}
-                        </span>
-                      </div>
-
-                      <div className="mt-2 text-sm text-gray-500">
-                        Submitted by:{" "}
-                        <span className="font-semibold text-gray-700">
-                          {request.submitted_by_agent_profile?.full_name ||
-                            "Not provided"}
-                        </span>{" "}
-                        · {formatDate(request.created_at)}
+                          {getRejectButtonText(request, rejectingThis)}
+                        </button>
                       </div>
                     </div>
                   </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      onClick={() => setSelectedRequest(request)}
-                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50"
-                    >
-                      <Eye className="h-4 w-4" />
-                      Review
-                    </button>
-
-                    {request.status !== "APPROVED" && (
-                      <button
-                        onClick={() => handleAction(request.id, "APPROVE")}
-                        disabled={actionLoading}
-                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        <CheckCircle2 className="h-4 w-4" />
-                        Approve
-                      </button>
-                    )}
-
-                    {request.status !== "REJECTED" && (
-                      <button
-                        onClick={() => {
-                          setSelectedRequest(request);
-                          setRejectionReason("");
-                          setRejectModalOpen(true);
-                        }}
-                        disabled={actionLoading}
-                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        <XCircle className="h-4 w-4" />
-                        Reject
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
+                </article>
+              );
+            })
           )}
-        </div>
+        </section>
 
-        <div className="flex flex-col items-center justify-between gap-3 rounded-2xl bg-white p-4 shadow-sm sm:flex-row">
-          <p className="text-sm text-gray-600">
-            Showing page {pagination.page} of {pagination.totalPages || 1} ·{" "}
+        <div className="flex flex-col items-center justify-between gap-3 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row">
+          <p className="text-sm font-semibold text-slate-600">
+            Showing page {pagination.page} of {pagination.totalPages || 1} •{' '}
             {pagination.total} total records
           </p>
 
           <div className="flex gap-2">
             <button
+              type="button"
               disabled={pagination.page <= 1 || loading}
               onClick={() => fetchRequests(pagination.page - 1)}
-              className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-black text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Previous
             </button>
 
             <button
+              type="button"
               disabled={pagination.page >= pagination.totalPages || loading}
               onClick={() => fetchRequests(pagination.page + 1)}
-              className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-black text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Next
             </button>
@@ -631,21 +1014,23 @@ export default function AdminVerificationsPage() {
       </div>
 
       {selectedRequest && !rejectModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="max-h-[90vh] w-full max-w-6xl overflow-y-auto rounded-2xl bg-white shadow-xl">
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-100 bg-white p-5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="max-h-[90vh] w-full max-w-6xl overflow-y-auto rounded-3xl bg-white shadow-xl">
+            <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-100 bg-white p-5">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">
+                <h2 className="text-xl font-black text-slate-900">
                   Review Verification Request
                 </h2>
-                <p className="text-sm text-gray-500">
+
+                <p className="text-sm font-semibold text-slate-500">
                   {selectedRequest.full_name}
                 </p>
               </div>
 
               <button
+                type="button"
                 onClick={() => setSelectedRequest(null)}
-                className="rounded-xl p-2 text-gray-500 transition hover:bg-gray-100 hover:text-gray-700"
+                className="rounded-2xl p-2 text-slate-500 transition hover:bg-slate-100"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -654,23 +1039,23 @@ export default function AdminVerificationsPage() {
             <div className="space-y-6 p-5">
               <div className="flex flex-wrap items-center gap-3">
                 <span
-                  className={`inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-sm font-bold ${getStatusBadge(
+                  className={`inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-sm font-black ${getStatusBadge(
                     selectedRequest.status
                   )}`}
                 >
                   {getStatusIcon(selectedRequest.status)}
-                  {selectedRequest.status || "PENDING"}
+                  {formatLabel(selectedRequest.status || 'PENDING')}
                 </span>
 
                 {selectedRequest.is_resubmitted && (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-bold text-blue-700">
+                  <span className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-black text-blue-700">
                     <RefreshCw className="h-4 w-4" />
-                    RESUBMITTED BY AGENT
+                    Resubmitted By Agent
                   </span>
                 )}
 
-                <span className="rounded-full bg-gray-100 px-3 py-1.5 text-sm font-semibold text-gray-700">
-                  Category: {selectedRequest.user_category || "Not provided"}
+                <span className="rounded-full bg-slate-100 px-3 py-1.5 text-sm font-black text-slate-700">
+                  Category: {formatLabel(selectedRequest.user_category)}
                 </span>
               </div>
 
@@ -680,16 +1065,19 @@ export default function AdminVerificationsPage() {
                   label="Full Name"
                   value={selectedRequest.full_name}
                 />
+
                 <InfoRow
                   icon={<Phone className="h-4 w-4" />}
                   label="Phone"
                   value={selectedRequest.phone}
                 />
+
                 <InfoRow
                   icon={<Mail className="h-4 w-4" />}
                   label="Email"
                   value={selectedRequest.email}
                 />
+
                 <InfoRow
                   icon={<MapPin className="h-4 w-4" />}
                   label="Location"
@@ -701,82 +1089,99 @@ export default function AdminVerificationsPage() {
                       selectedRequest.country,
                     ]
                       .filter(Boolean)
-                      .join(", ") || null
+                      .join(', ') || null
                   }
                 />
+
                 <InfoRow
                   icon={<Calendar className="h-4 w-4" />}
                   label="Date of Birth"
                   value={formatDate(selectedRequest.date_of_birth)}
                 />
+
                 <InfoRow
                   icon={<BadgeCheck className="h-4 w-4" />}
                   label="User Category"
-                  value={selectedRequest.user_category}
+                  value={formatLabel(selectedRequest.user_category)}
                 />
+
                 <InfoRow
                   icon={<Briefcase className="h-4 w-4" />}
                   label="Occupation"
                   value={selectedRequest.occupation}
                 />
+
                 <InfoRow
                   icon={<Briefcase className="h-4 w-4" />}
                   label="Employer"
                   value={selectedRequest.employer_name}
                 />
+
                 <InfoRow
                   icon={<FileText className="h-4 w-4" />}
                   label="Staff ID"
                   value={selectedRequest.staff_id}
                 />
+
                 <InfoRow
                   icon={<Briefcase className="h-4 w-4" />}
                   label="Business Name"
                   value={selectedRequest.business_name}
                 />
+
                 <InfoRow
                   icon={<Briefcase className="h-4 w-4" />}
                   label="Business Type"
                   value={selectedRequest.business_type}
                 />
+
                 <InfoRow
                   icon={<MapPin className="h-4 w-4" />}
                   label="Business Location"
                   value={selectedRequest.business_location}
                 />
+
                 <InfoRow
                   icon={<FileText className="h-4 w-4" />}
                   label="Ghana Card Number"
                   value={selectedRequest.ghana_card_number}
                 />
+
                 <InfoRow
                   icon={<Phone className="h-4 w-4" />}
                   label="MoMo Number"
                   value={selectedRequest.momo_number}
                 />
+
                 <InfoRow
                   icon={<Landmark className="h-4 w-4" />}
                   label="Bank Name"
                   value={selectedRequest.bank_name}
                 />
+
                 <InfoRow
                   icon={<Landmark className="h-4 w-4" />}
                   label="Bank Account Number"
                   value={selectedRequest.bank_account_number}
                 />
+
+                <InfoRow
+                  icon={<Landmark className="h-4 w-4" />}
+                  label="Bank Account Name"
+                  value={selectedRequest.bank_account_name}
+                />
+
                 <InfoRow
                   icon={<User className="h-4 w-4" />}
                   label="Emergency Contact"
                   value={`${
-                    selectedRequest.emergency_contact_name || "Not provided"
-                  } — ${
-                    selectedRequest.emergency_contact_phone || "No phone"
-                  }`}
+                    selectedRequest.emergency_contact_name || 'Not provided'
+                  } — ${selectedRequest.emergency_contact_phone || 'No phone'}`}
                 />
               </div>
 
               <div>
-                <h3 className="mb-3 text-lg font-bold text-gray-900">
+                <h3 className="mb-3 text-lg font-black text-slate-900">
                   Verification Documents
                 </h3>
 
@@ -784,10 +1189,10 @@ export default function AdminVerificationsPage() {
                   {selectedDocuments.map((doc) => (
                     <div
                       key={doc.label}
-                      className="overflow-hidden rounded-2xl border border-gray-100 bg-gray-50"
+                      className="overflow-hidden rounded-3xl border border-slate-100 bg-slate-50"
                     >
-                      <div className="border-b border-gray-100 bg-white p-3">
-                        <p className="text-sm font-bold text-gray-900">
+                      <div className="border-b border-slate-100 bg-white p-3">
+                        <p className="text-sm font-black text-slate-900">
                           {doc.label}
                         </p>
                       </div>
@@ -801,9 +1206,9 @@ export default function AdminVerificationsPage() {
                           />
                         </a>
                       ) : (
-                        <div className="flex h-72 flex-col items-center justify-center text-gray-400">
+                        <div className="flex h-72 flex-col items-center justify-center text-slate-400">
                           <ImageIcon className="h-10 w-10" />
-                          <p className="mt-2 text-sm font-medium">
+                          <p className="mt-2 text-sm font-semibold">
                             No image uploaded
                           </p>
                         </div>
@@ -813,8 +1218,8 @@ export default function AdminVerificationsPage() {
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
-                <h3 className="font-bold text-blue-900">
+              <div className="rounded-3xl border border-emerald-100 bg-emerald-50 p-4">
+                <h3 className="font-black text-emerald-900">
                   Agent / Review Information
                 </h3>
 
@@ -824,26 +1229,31 @@ export default function AdminVerificationsPage() {
                     label="Submitted By Agent"
                     value={selectedRequest.submitted_by_agent_profile?.full_name}
                   />
+
                   <InfoRow
                     icon={<Phone className="h-4 w-4" />}
                     label="Agent Phone"
                     value={selectedRequest.submitted_by_agent_profile?.phone}
                   />
+
                   <InfoRow
                     icon={<Mail className="h-4 w-4" />}
                     label="Agent Email"
                     value={selectedRequest.submitted_by_agent_profile?.email}
                   />
+
                   <InfoRow
                     icon={<Calendar className="h-4 w-4" />}
                     label="Submitted At"
                     value={formatDateTime(selectedRequest.created_at)}
                   />
+
                   <InfoRow
                     icon={<User className="h-4 w-4" />}
                     label="Reviewed By"
                     value={selectedRequest.reviewed_by_profile?.full_name}
                   />
+
                   <InfoRow
                     icon={<Calendar className="h-4 w-4" />}
                     label="Reviewed At"
@@ -854,29 +1264,29 @@ export default function AdminVerificationsPage() {
 
               {selectedRequest.rejection_reason && (
                 <div
-                  className={`rounded-2xl border p-4 ${
+                  className={`rounded-3xl border p-4 ${
                     selectedRequest.is_resubmitted
-                      ? "border-blue-100 bg-blue-50"
-                      : "border-red-100 bg-red-50"
+                      ? 'border-blue-100 bg-blue-50'
+                      : 'border-red-100 bg-red-50'
                   }`}
                 >
                   <h3
-                    className={`font-bold ${
+                    className={`font-black ${
                       selectedRequest.is_resubmitted
-                        ? "text-blue-900"
-                        : "text-red-900"
+                        ? 'text-blue-900'
+                        : 'text-red-900'
                     }`}
                   >
                     {selectedRequest.is_resubmitted
-                      ? "Resubmission Note"
-                      : "Rejection Reason"}
+                      ? 'Resubmission Note'
+                      : 'Rejection Reason'}
                   </h3>
 
                   <p
-                    className={`mt-2 text-sm ${
+                    className={`mt-2 text-sm font-semibold leading-6 ${
                       selectedRequest.is_resubmitted
-                        ? "text-blue-700"
-                        : "text-red-700"
+                        ? 'text-blue-700'
+                        : 'text-red-700'
                     }`}
                   >
                     {selectedRequest.rejection_reason}
@@ -885,42 +1295,46 @@ export default function AdminVerificationsPage() {
               )}
             </div>
 
-            <div className="sticky bottom-0 flex flex-col gap-3 border-t border-gray-100 bg-white p-5 sm:flex-row sm:justify-end">
+            <div className="sticky bottom-0 flex flex-col gap-3 border-t border-slate-100 bg-white p-5 sm:flex-row sm:justify-end">
               <button
+                type="button"
                 onClick={() => setSelectedRequest(null)}
-                className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
+                className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-black text-slate-700 transition hover:bg-slate-50"
               >
                 Close
               </button>
 
-              {selectedRequest.status !== "REJECTED" && (
-                <button
-                  onClick={() => {
-                    setRejectionReason("");
-                    setRejectModalOpen(true);
-                  }}
-                  disabled={actionLoading}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <XCircle className="h-4 w-4" />
-                  Reject
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setRejectionReason('');
+                  setRejectModalOpen(true);
+                }}
+                disabled={!canRejectRequest(selectedRequest) || actionLoading}
+                className={`inline-flex items-center justify-center gap-2 rounded-2xl border px-4 py-2 text-sm font-black transition disabled:cursor-not-allowed ${getRejectButtonClass(
+                  selectedRequest
+                )}`}
+              >
+                <XCircle className="h-4 w-4" />
+                {getRejectButtonText(selectedRequest, false)}
+              </button>
 
-              {selectedRequest.status !== "APPROVED" && (
-                <button
-                  onClick={() => handleAction(selectedRequest.id, "APPROVE")}
-                  disabled={actionLoading}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {actionLoading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <CheckCircle2 className="h-4 w-4" />
-                  )}
-                  Approve Request
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => handleAction(selectedRequest.id, 'APPROVE')}
+                disabled={!canApproveRequest(selectedRequest) || actionLoading}
+                className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-2 text-sm font-black transition disabled:cursor-not-allowed ${getApproveButtonClass(
+                  selectedRequest
+                )}`}
+              >
+                {actionLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="h-4 w-4" />
+                )}
+
+                {getApproveButtonText(selectedRequest, actionLoading)}
+              </button>
             </div>
           </div>
         </div>
@@ -928,30 +1342,32 @@ export default function AdminVerificationsPage() {
 
       {rejectModalOpen && selectedRequest && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
+          <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-xl">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">
+                <h2 className="text-xl font-black text-slate-900">
                   Reject Verification Request
                 </h2>
-                <p className="mt-1 text-sm text-gray-500">
+
+                <p className="mt-1 text-sm font-semibold text-slate-500">
                   Please provide a clear rejection reason for this customer.
                 </p>
               </div>
 
               <button
+                type="button"
                 onClick={() => {
                   setRejectModalOpen(false);
-                  setRejectionReason("");
+                  setRejectionReason('');
                 }}
-                className="rounded-xl p-2 text-gray-500 transition hover:bg-gray-100 hover:text-gray-700"
+                className="rounded-2xl p-2 text-slate-500 transition hover:bg-slate-100"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
 
             <div className="mt-5">
-              <label className="text-sm font-semibold text-gray-700">
+              <label className="text-sm font-black text-slate-700">
                 Rejection Reason
               </label>
 
@@ -960,39 +1376,42 @@ export default function AdminVerificationsPage() {
                 onChange={(event) => setRejectionReason(event.target.value)}
                 rows={5}
                 placeholder="Example: Ghana Card image is not clear. Please upload a clearer image."
-                className="mt-2 w-full rounded-xl border border-gray-200 p-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                className="mt-2 w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-semibold outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
               />
             </div>
 
             <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
               <button
+                type="button"
                 onClick={() => {
                   setRejectModalOpen(false);
-                  setRejectionReason("");
+                  setRejectionReason('');
                 }}
-                className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
+                className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-black text-slate-700 transition hover:bg-slate-50"
               >
                 Cancel
               </button>
 
               <button
+                type="button"
                 onClick={() =>
-                  handleAction(selectedRequest.id, "REJECT", rejectionReason)
+                  handleAction(selectedRequest.id, 'REJECT', rejectionReason)
                 }
                 disabled={actionLoading || !rejectionReason.trim()}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-red-600 px-4 py-2 text-sm font-black text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {actionLoading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <ShieldAlert className="h-4 w-4" />
                 )}
+
                 Reject Request
               </button>
             </div>
           </div>
         </div>
       )}
-    </div>
+    </main>
   );
 }

@@ -12,9 +12,6 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
   AlertCircle,
   ArrowLeft,
-  BadgeCheck,
-  CheckCircle2,
-  CircleDollarSign,
   Clock,
   CreditCard,
   Info,
@@ -22,11 +19,11 @@ import {
   RefreshCw,
   Smartphone,
   Trophy,
-  Users,
   Wallet,
 } from 'lucide-react';
 
 import { ManualMerchantPaymentModal } from '@/components/fund-space/ManualMerchantPaymentModal';
+import { FundSpaceTransparencyDashboard } from '@/components/fund-space/FundSpaceTransparencyDashboard';
 import { supabase } from '@/lib/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
@@ -164,6 +161,8 @@ type VerifyPaymentResponse = {
   payment_status?: string;
   verification_mismatch?: boolean;
 };
+
+type ActiveSection = 'transparency' | 'schedule' | 'records';
 
 function formatCurrency(amount: number | null | undefined) {
   return `GH₵${Number(amount || 0).toLocaleString('en-GH', {
@@ -310,6 +309,8 @@ export default function FundSpaceDetailsPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [payingContribution, setPayingContribution] = useState(false);
   const [verifyingPayment, setVerifyingPayment] = useState(false);
+  const [activeSection, setActiveSection] =
+    useState<ActiveSection>('transparency');
   const [momoPaymentContribution, setMomoPaymentContribution] =
     useState<Contribution | null>(null);
 
@@ -337,9 +338,7 @@ export default function FundSpaceDetailsPage() {
       .eq('id', fundSpaceId)
       .maybeSingle();
 
-    if (error) {
-      throw error;
-    }
+    if (error) throw error;
 
     const loaded = data as unknown as FundSpace | null;
 
@@ -358,9 +357,7 @@ export default function FundSpaceDetailsPage() {
         .in('status', ['ACTIVE', 'COMPLETED'])
         .maybeSingle();
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       if (!data) {
         setErrorMessage('You are not an active member of this Fund Space.');
@@ -385,9 +382,7 @@ export default function FundSpaceDetailsPage() {
       .in('status', ['ACTIVE', 'COMPLETED'])
       .order('payout_order', { ascending: true, nullsFirst: false });
 
-    if (memberError) {
-      throw memberError;
-    }
+    if (memberError) throw memberError;
 
     const rawMembers = (memberData || []) as unknown as FundSpaceMember[];
 
@@ -421,12 +416,12 @@ export default function FundSpaceDetailsPage() {
       ((profileData || []) as ProfileSummary[]).map((item) => [item.id, item])
     );
 
-    const mergedMembers = rawMembers.map((member) => ({
-      ...member,
-      profile: profileMap.get(member.user_id) || null,
-    }));
-
-    setMembers(mergedMembers);
+    setMembers(
+      rawMembers.map((member) => ({
+        ...member,
+        profile: profileMap.get(member.user_id) || null,
+      }))
+    );
   }, [fundSpaceId]);
 
   const loadRounds = useCallback(async () => {
@@ -557,8 +552,14 @@ export default function FundSpaceDetailsPage() {
 
             const result = await response.json().catch(() => null);
 
-            if (response.ok && result?.success && Array.isArray(result.submissions)) {
-              const adminLoaded = (result.submissions as ManualPaymentSubmission[]).filter(
+            if (
+              response.ok &&
+              result?.success &&
+              Array.isArray(result.submissions)
+            ) {
+              const adminLoaded = (
+                result.submissions as ManualPaymentSubmission[]
+              ).filter(
                 (submission) =>
                   submission.user_id === userId &&
                   submission.fund_space_id === fundSpaceId &&
@@ -589,11 +590,6 @@ export default function FundSpaceDetailsPage() {
             .map((submission) => submission.contribution_id)
         );
 
-        /**
-         * Only remove the local lock when the real PENDING_REVIEW row has been
-         * loaded from the server. Do not remove it just because an older REJECTED
-         * row exists for the same contribution.
-         */
         setOptimisticPendingContributionIds((current) =>
           current.filter(
             (contributionId) => !loadedPendingContributionIds.has(contributionId)
@@ -620,9 +616,7 @@ export default function FundSpaceDetailsPage() {
           error: userError,
         } = await supabase.auth.getUser();
 
-        if (userError) {
-          throw userError;
-        }
+        if (userError) throw userError;
 
         const userId = profile?.id || user?.id;
 
@@ -640,9 +634,7 @@ export default function FundSpaceDetailsPage() {
 
         const memberRecord = await loadMyMemberRecord(userId);
 
-        if (!memberRecord) {
-          return;
-        }
+        if (!memberRecord) return;
 
         await Promise.all([
           loadMembers(),
@@ -655,12 +647,11 @@ export default function FundSpaceDetailsPage() {
       } catch (error: unknown) {
         console.error('Fund Space details load error:', error);
 
-        const message =
+        setErrorMessage(
           error instanceof Error
             ? error.message
-            : 'Unable to load Fund Space details.';
-
-        setErrorMessage(message);
+            : 'Unable to load Fund Space details.'
+        );
       } finally {
         setPageLoading(false);
         setRefreshing(false);
@@ -781,9 +772,7 @@ export default function FundSpaceDetailsPage() {
 
     const index = sorted.findIndex((member) => member.id === myMemberRecord.id);
 
-    if (index === -1) return null;
-
-    return index + 1;
+    return index === -1 ? null : index + 1;
   }, [members, myMemberRecord]);
 
   const currentRound = useMemo(() => {
@@ -884,12 +873,6 @@ export default function FundSpaceDetailsPage() {
     for (const contributionId of optimisticPendingContributionIds) {
       const existingSubmission = map.get(contributionId);
 
-      /**
-       * Important:
-       * An older REJECTED submission must not keep the button active after the
-       * user submits a new reference. The local PENDING_REVIEW lock must override
-       * any older non-pending record until the server reloads the real pending row.
-       */
       if (!existingSubmission || existingSubmission.status !== 'PENDING_REVIEW') {
         map.set(contributionId, {
           id: `optimistic-${contributionId}`,
@@ -932,10 +915,11 @@ export default function FundSpaceDetailsPage() {
       ? manualSubmissionForTarget
       : null;
 
-  const isMomoLockedForTarget = Boolean(
-    paymentTargetContribution &&
-      optimisticPendingContributionIds.includes(paymentTargetContribution.id)
-  ) || Boolean(pendingManualSubmissionForTarget);
+  const isMomoLockedForTarget =
+    Boolean(
+      paymentTargetContribution &&
+        optimisticPendingContributionIds.includes(paymentTargetContribution.id)
+    ) || Boolean(pendingManualSubmissionForTarget);
 
   const pendingPaymentForTarget = useMemo(() => {
     if (!paymentTargetContribution) return null;
@@ -983,8 +967,6 @@ export default function FundSpaceDetailsPage() {
 
   const memberCount = members.length;
   const maxMembers = fundSpace?.member_limit ?? 10;
-  const progress =
-    maxMembers > 0 ? Math.min((memberCount / maxMembers) * 100, 100) : 0;
 
   const currentContributionProgress = currentContribution
     ? getPaymentProgress(
@@ -1137,14 +1119,29 @@ export default function FundSpaceDetailsPage() {
     }
   }
 
+  function openMomoPayment() {
+    if (!paymentTargetContribution) return;
+
+    if (isMomoLockedForTarget) {
+      toast({
+        title: 'Awaiting verification',
+        description:
+          'Your MoMo payment reference has already been submitted for this contribution. Please wait for admin verification.',
+      });
+      return;
+    }
+
+    if (!canPayWithMomo) return;
+
+    setMomoPaymentContribution(paymentTargetContribution);
+  }
+
   if (loading || pageLoading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
         <div className="text-center">
           <Loader2 className="mx-auto mb-4 h-10 w-10 animate-spin text-emerald-600" />
-          <p className="text-sm text-gray-500">
-            Loading Fund Space details...
-          </p>
+          <p className="text-sm text-gray-500">Loading Fund Space details...</p>
         </div>
       </div>
     );
@@ -1153,14 +1150,7 @@ export default function FundSpaceDetailsPage() {
   if (errorMessage && !fundSpace) {
     return (
       <div className="space-y-5">
-        <button
-          type="button"
-          onClick={() => router.push('/dashboard/fund-space')}
-          className="inline-flex items-center gap-2 text-sm font-semibold text-gray-500 hover:text-gray-900"
-        >
-          <ArrowLeft size={16} />
-          Back to Fund Space
-        </button>
+        <BackButton onClick={() => router.push('/dashboard/fund-space')} />
 
         <div className="rounded-2xl border border-red-100 bg-red-50 p-6">
           <div className="flex items-start gap-3">
@@ -1181,16 +1171,9 @@ export default function FundSpaceDetailsPage() {
 
   return (
     <>
-      <div className="space-y-8">
-        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-          <button
-            type="button"
-            onClick={() => router.push('/dashboard/fund-space')}
-            className="inline-flex items-center gap-2 text-sm font-semibold text-gray-500 hover:text-gray-900"
-          >
-            <ArrowLeft size={16} />
-            Back to Fund Space
-          </button>
+      <div className="space-y-5">
+        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+          <BackButton onClick={() => router.push('/dashboard/fund-space')} />
 
           <button
             type="button"
@@ -1204,772 +1187,212 @@ export default function FundSpaceDetailsPage() {
         </div>
 
         {verifyingPayment && (
-          <div className="flex items-start gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm font-semibold text-emerald-700">
+          <AlertMessage type="success">
             <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin" />
             <span>
-              Verifying your contribution payment before updating your Fund
-              Space record.
+              Verifying your contribution payment before updating your Fund Space
+              record.
             </span>
-          </div>
+          </AlertMessage>
         )}
 
         {errorMessage && (
-          <div className="flex items-start gap-3 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm font-semibold text-amber-700">
+          <AlertMessage type="warning">
             <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
             <span>{errorMessage}</span>
+          </AlertMessage>
+        )}
+
+        <section className="grid gap-5 xl:grid-cols-[1fr_420px]">
+          <div className="rounded-3xl bg-gradient-to-r from-emerald-700 via-emerald-600 to-teal-600 p-5 text-white shadow-sm md:p-7">
+            <div className="flex h-full flex-col justify-between gap-6">
+              <div>
+                <p className="mb-3 inline-flex rounded-full bg-white/15 px-4 py-1 text-sm font-medium">
+                  My Fund Space
+                </p>
+
+                <h1 className="break-words text-2xl font-black md:text-4xl">
+                  {fundSpace?.name || 'TrustPoint Fund Space'}
+                </h1>
+
+                <p className="mt-3 max-w-3xl text-sm leading-7 text-emerald-50 md:text-base">
+                  Weekly contribution of{' '}
+                  <span className="font-bold">
+                    {formatCurrency(fundSpace?.contribution_amount)}
+                  </span>{' '}
+                  with a trusted {maxMembers}-member rotational payout structure.
+                </p>
+
+                <div className="mt-5 flex flex-wrap gap-2">
+                  <StatusPill label={fundSpace?.status || 'FORMING'} />
+                  <StatusPill label={`${memberCount}/${maxMembers} Members`} light />
+                  <StatusPill
+                    label={`Round ${fundSpace?.current_round_number || 0}`}
+                    light
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <HeroMiniCard
+                  label="My Payout Position"
+                  value={memberPosition ? `#${memberPosition}` : 'Pending'}
+                  helper={
+                    myPayoutRound
+                      ? `Expected in Round ${myPayoutRound.round_number}`
+                      : 'Position appears after activation.'
+                  }
+                />
+
+                <HeroMiniCard
+                  label="Current Recipient"
+                  value={
+                    currentRoundRecipient?.user_id === profile?.id
+                      ? 'You'
+                      : currentRoundRecipient?.profile?.full_name || 'Not set'
+                  }
+                  helper={
+                    currentRound
+                      ? `Round ${currentRound.round_number}`
+                      : 'No active round yet.'
+                  }
+                />
+              </div>
+            </div>
+          </div>
+
+          <QuickPaymentCard
+            paymentTargetContribution={paymentTargetContribution}
+            amountRemaining={amountRemaining}
+            pendingManualSubmissionForTarget={pendingManualSubmissionForTarget}
+            rejectedManualSubmissionForTarget={rejectedManualSubmissionForTarget}
+            pendingPaymentForTarget={pendingPaymentForTarget}
+            isMomoLockedForTarget={isMomoLockedForTarget}
+            canPayWithMomo={canPayWithMomo}
+            canPayContribution={canPayContribution}
+            verifyingPayment={verifyingPayment}
+            payingContribution={payingContribution}
+            onMomoPayment={openMomoPayment}
+            onOnlinePayment={handlePayContribution}
+          />
+        </section>
+
+        <div className="grid gap-5 2xl:grid-cols-2">
+          <TrustShieldCard userId={profile?.id} />
+
+          <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+            <div className="flex items-start gap-3">
+              <Info className="mt-1 h-5 w-5 shrink-0 text-emerald-700" />
+
+              <div className="min-w-0 flex-1">
+                <h2 className="text-lg font-black text-slate-900">
+                  What to check first
+                </h2>
+
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+                  Pay your weekly contribution first. Then use the transparency,
+                  payout order, and records tabs below to check what is happening
+                  in the group.
+                </p>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-2">
+                  <InfoPanel
+                    label="Current Round"
+                    value={`Round ${fundSpace?.current_round_number ?? 0}`}
+                  />
+                  <InfoPanel
+                    label="Weekly Amount"
+                    value={formatCurrency(fundSpace?.contribution_amount)}
+                  />
+                  <InfoPanel
+                    label="My Payment"
+                    value={
+                      paymentTargetContribution
+                        ? formatLabel(paymentTargetContribution.status)
+                        : 'Not available'
+                    }
+                  />
+                  <InfoPanel
+                    label="Deadline"
+                    value={formatDate(currentRound?.contribution_deadline)}
+                  />
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <SectionTabs
+          activeSection={activeSection}
+          onChange={setActiveSection}
+        />
+
+        {activeSection === 'transparency' && (
+          <FundSpaceTransparencyDashboard fundSpaceId={fundSpaceId} compact />
+        )}
+
+        {activeSection === 'schedule' && (
+          <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
+            <CurrentRoundPanel
+              currentRound={currentRound}
+              currentRoundRecipient={currentRoundRecipient}
+              currentContribution={currentContribution}
+              currentContributionProgress={currentContributionProgress}
+              profileId={profile?.id}
+            />
+
+            <div className="space-y-5">
+              {myPayoutRound && (
+                <div className="rounded-3xl border border-emerald-100 bg-emerald-50 p-6 shadow-sm">
+                  <h2 className="text-xl font-black text-emerald-900">
+                    My Expected Payout
+                  </h2>
+
+                  <p className="mt-2 text-sm text-emerald-700">
+                    Round {myPayoutRound.round_number}
+                  </p>
+
+                  <p className="mt-2 text-sm text-emerald-700">
+                    {formatDate(myPayoutRound.week_start_date)} -{' '}
+                    {formatDate(myPayoutRound.week_end_date)}
+                  </p>
+
+                  <span
+                    className={`mt-4 inline-flex rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
+                      myPayoutRound.status
+                    )}`}
+                  >
+                    {formatLabel(myPayoutRound.status)}
+                  </span>
+                </div>
+              )}
+
+              {myLatestPayout && <LatestPayoutCard payout={myLatestPayout} />}
+            </div>
+
+            <PayoutOrderSchedule
+              schedule={payoutOrderSchedule}
+              profileId={profile?.id}
+            />
           </div>
         )}
 
-        <div className="rounded-3xl bg-gradient-to-r from-emerald-700 via-emerald-600 to-teal-600 p-6 text-white shadow-sm md:p-8">
-          <div className="flex flex-col justify-between gap-6 xl:flex-row xl:items-center">
-            <div>
-              <p className="mb-3 inline-flex rounded-full bg-white/15 px-4 py-1 text-sm font-medium">
-                My Fund Space
-              </p>
-
-              <h1 className="text-3xl font-black md:text-4xl">
-                {fundSpace?.name || 'TrustPoint Fund Space'}
-              </h1>
-
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-emerald-50 md:text-base">
-                Weekly contribution of{' '}
-                <span className="font-bold">
-                  {formatCurrency(fundSpace?.contribution_amount)}
-                </span>{' '}
-                with a trusted {maxMembers}-member rotational payout structure.
-              </p>
-
-              <div className="mt-5 flex flex-wrap gap-2">
-                <StatusPill label={fundSpace?.status || 'FORMING'} />
-                <StatusPill label={`${memberCount}/${maxMembers} Members`} light />
-                <StatusPill
-                  label={`Round ${fundSpace?.current_round_number || 0}`}
-                  light
-                />
-              </div>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2 xl:w-[520px]">
-              <div className="rounded-2xl bg-white/15 p-5 backdrop-blur">
-                <p className="text-sm text-emerald-50">My Payout Position</p>
-                <p className="mt-1 text-3xl font-black">
-                  {memberPosition ? `#${memberPosition}` : 'Pending'}
-                </p>
-                <p className="mt-1 text-xs text-emerald-50">
-                  {myPayoutRound
-                    ? `Expected in Week ${myPayoutRound.round_number}`
-                    : 'Position appears after activation.'}
-                </p>
-              </div>
-
-              <div className="rounded-2xl bg-white/15 p-5 backdrop-blur">
-                <p className="text-sm text-emerald-50">Current Recipient</p>
-                <p className="mt-1 text-lg font-black">
-                  {currentRoundRecipient?.user_id === profile?.id
-                    ? 'You'
-                    : currentRoundRecipient?.profile?.full_name || 'Not set'}
-                </p>
-                <p className="mt-1 text-xs text-emerald-50">
-                  {currentRound
-                    ? `Round ${currentRound.round_number}`
-                    : 'No active round yet.'}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <TrustShieldCard userId={profile?.id} />
-
-        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-          <SummaryCard
-            title="Members"
-            value={`${memberCount}/${maxMembers}`}
-            icon={<Users size={24} />}
-          />
-
-          <SummaryCard
-            title="Weekly Amount"
-            value={formatCurrency(fundSpace?.contribution_amount)}
-            icon={<CircleDollarSign size={24} />}
-          />
-
-          <SummaryCard
-            title="Current Round"
-            value={`${fundSpace?.current_round_number ?? 0}`}
-            icon={<Clock size={24} />}
-          />
-
-          <SummaryCard
-            title="Group Status"
-            value={formatLabel(fundSpace?.status || 'FORMING')}
-            icon={<BadgeCheck size={24} />}
-          />
-        </div>
-
-        <div className="rounded-3xl border border-emerald-100 bg-white p-6 shadow-sm">
-          <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-center">
-            <div>
-              <h2 className="flex items-center gap-2 text-xl font-black text-gray-900">
-                <Wallet className="h-5 w-5 text-emerald-600" />
-                Weekly Contribution
-              </h2>
-
-              <p className="mt-1 text-sm text-gray-500">
-                Pay through TrustPoint MoMo and submit your transaction
-                reference for admin verification.
-              </p>
-
-              {paymentTargetContribution ? (
-                <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                  <InfoPanel
-                    label="Amount Due"
-                    value={formatCurrency(paymentTargetContribution.amount_due)}
-                  />
-                  <InfoPanel
-                    label="Amount Paid"
-                    value={formatCurrency(paymentTargetContribution.amount_paid)}
-                  />
-                  <InfoPanel
-                    label="Remaining"
-                    value={formatCurrency(amountRemaining)}
-                  />
-                </div>
-              ) : (
-                <p className="mt-4 text-sm text-gray-500">
-                  No pending contribution is available for payment.
-                </p>
-              )}
-
-              {pendingManualSubmissionForTarget && (
-                <div className="mt-4 flex items-start gap-3 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-700">
-                  <Clock className="mt-0.5 h-5 w-5 shrink-0" />
-                  <div>
-                    <p className="font-black">MoMo payment awaiting verification</p>
-                    <p className="mt-1 leading-6">
-                      Your payment reference has already been submitted for admin
-                      review. You cannot submit another MoMo payment until admin
-                      approves or rejects this request.
-                    </p>
-                    <p className="mt-2 text-xs font-semibold">
-                      Reference: {pendingManualSubmissionForTarget.transaction_reference}
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {rejectedManualSubmissionForTarget && !pendingManualSubmissionForTarget && (
-                <div className="mt-4 flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">
-                  <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
-                  <div>
-                    <p className="font-black">Previous MoMo payment was rejected</p>
-                    <p className="mt-1 leading-6">
-                      You may submit a corrected MoMo payment reference.
-                    </p>
-                    {rejectedManualSubmissionForTarget.rejection_reason && (
-                      <p className="mt-2 text-xs font-semibold">
-                        Reason: {rejectedManualSubmissionForTarget.rejection_reason}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {pendingPaymentForTarget && (
-                <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-700">
-                  <p className="font-bold">Pending online payment found</p>
-                  <p className="mt-1">
-                    Reference:{' '}
-                    {pendingPaymentForTarget.provider_reference ||
-                      pendingPaymentForTarget.internal_reference}
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-3 lg:w-[280px]">
-              <button
-                type="button"
-                onClick={() => {
-                  if (!paymentTargetContribution) return;
-
-                  if (isMomoLockedForTarget) {
-                    toast({
-                      title: 'Awaiting verification',
-                      description:
-                        'Your MoMo payment reference has already been submitted for this contribution. Please wait for admin verification.',
-                    });
-                    return;
-                  }
-
-                  if (!canPayWithMomo) return;
-
-                  setMomoPaymentContribution(paymentTargetContribution);
-                }}
-                disabled={isMomoLockedForTarget || !canPayWithMomo || verifyingPayment}
-                className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <Smartphone className="h-4 w-4" />
-                {isMomoLockedForTarget ? 'Awaiting Verification' : 'Pay with MoMo'}
-              </button>
-
-              <button
-                type="button"
-                disabled
-                title="Online payment will be available soon. Please use Pay with MoMo for now."
-                className="inline-flex min-h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-gray-100 px-5 text-sm font-bold text-gray-400 shadow-sm"
-              >
-                <CreditCard className="h-4 w-4" />
-                Pay Online
-              </button>
-
-              {isMomoLockedForTarget && (
-                <p className="text-xs leading-5 text-amber-700">
-                  Pay with MoMo is locked because this contribution already has a
-                  payment request awaiting admin verification.
-                </p>
-              )}
-
-              {!canPayContribution && paymentTargetContribution && (
-                <p className="text-xs leading-5 text-gray-500">
-                  Payment may be unavailable because your account is not active,
-                  your role cannot pay this contribution, the group is not active,
-                  or this contribution is already paid. Admin and super admin
-                  members are allowed to submit their own MoMo reference, but
-                  another admin must verify it.
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
-          <div className="mb-2 flex items-center justify-between text-sm">
-            <span className="font-medium text-gray-600">Group progress</span>
-            <span className="font-bold text-emerald-700">
-              {Math.round(progress)}%
-            </span>
-          </div>
-
-          <div className="h-3 overflow-hidden rounded-full bg-gray-100">
-            <div
-              className="h-full rounded-full bg-emerald-600 transition-all"
-              style={{ width: `${progress}%` }}
+        {activeSection === 'records' && (
+          <div className="grid gap-5 xl:grid-cols-2">
+            <ContributionRecords
+              myContributions={myContributions}
+              manualSubmissionByContributionId={manualSubmissionByContributionId}
             />
-          </div>
 
-          <p className="mt-3 text-sm text-gray-500">
-            {fundSpace?.status === 'FORMING'
-              ? `This group will activate automatically when it reaches ${maxMembers} members.`
-              : 'This group is active and contribution rounds are available.'}
-          </p>
-        </div>
+            <PayoutRecords myPayouts={myPayouts} />
 
-        <div className="grid gap-6 xl:grid-cols-3">
-          <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm xl:col-span-2">
-            <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
-              <div>
-                <h2 className="text-xl font-black text-gray-900">
-                  Current Round Overview
-                </h2>
-                <p className="mt-1 text-sm text-gray-500">
-                  See who receives this round and your own payment status.
-                </p>
-              </div>
-
-              {currentRound && (
-                <span
-                  className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                    currentRound.status
-                  )}`}
-                >
-                  {formatLabel(currentRound.status)}
-                </span>
-              )}
-            </div>
-
-            {currentRound ? (
-              <div className="mt-6 grid gap-4 md:grid-cols-2">
-                <InfoPanel
-                  label="Round Number"
-                  value={`Round ${currentRound.round_number}`}
-                />
-
-                <InfoPanel
-                  label="Contribution Deadline"
-                  value={formatDate(currentRound.contribution_deadline)}
-                />
-
-                <InfoPanel
-                  label="Week Period"
-                  value={`${formatDate(currentRound.week_start_date)} - ${formatDate(
-                    currentRound.week_end_date
-                  )}`}
-                />
-
-                <InfoPanel
-                  label="Expected Total"
-                  value={formatCurrency(currentRound.expected_total_amount)}
-                />
-
-                <div className="rounded-2xl bg-emerald-50 p-4 md:col-span-2">
-                  <div className="flex items-start gap-3">
-                    <Trophy className="mt-1 h-5 w-5 shrink-0 text-emerald-700" />
-
-                    <div>
-                      <p className="text-sm text-emerald-700">
-                        Current Round Recipient
-                      </p>
-                      <p className="mt-1 text-lg font-black text-emerald-900">
-                        {currentRoundRecipient?.user_id === profile?.id
-                          ? 'You are the recipient for this round'
-                          : currentRoundRecipient?.profile?.full_name ||
-                            'Recipient not found'}
-                      </p>
-                      <p className="mt-1 text-xs text-emerald-700">
-                        {currentRoundRecipient?.profile?.phone || 'No phone'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-gray-100 p-4 md:col-span-2">
-                  <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-                    <div>
-                      <p className="text-sm text-gray-500">
-                        My Payment For This Round
-                      </p>
-                      <p className="mt-1 text-lg font-black text-gray-900">
-                        {currentContribution
-                          ? `${formatCurrency(
-                              currentContribution.amount_paid
-                            )} / ${formatCurrency(currentContribution.amount_due)}`
-                          : 'No contribution record found'}
-                      </p>
-                    </div>
-
-                    {currentContribution && (
-                      <span
-                        className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                          currentContribution.status
-                        )}`}
-                      >
-                        {formatLabel(currentContribution.status)}
-                      </span>
-                    )}
-                  </div>
-
-                  {currentContribution && (
-                    <>
-                      <div className="mt-4 h-3 overflow-hidden rounded-full bg-gray-100">
-                        <div
-                          className="h-full rounded-full bg-emerald-600 transition-all"
-                          style={{ width: `${currentContributionProgress}%` }}
-                        />
-                      </div>
-
-                      <p className="mt-2 text-xs text-gray-500">
-                        Payment reference:{' '}
-                        {currentContribution.payment_reference || 'Not set'}
-                      </p>
-                    </>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="mt-6 rounded-2xl bg-gray-50 p-6 text-sm text-gray-500">
-                No current round yet. Rounds will appear when the group activates.
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-6">
-            <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
-              <h2 className="text-xl font-black text-gray-900">
-                My Next Contribution
-              </h2>
-
-              {myNextContribution ? (
-                <div className="mt-5 space-y-4">
-                  <InfoPanel
-                    label="Amount Due"
-                    value={formatCurrency(myNextContribution.amount_due)}
-                  />
-
-                  <InfoPanel
-                    label="Amount Paid"
-                    value={formatCurrency(myNextContribution.amount_paid)}
-                  />
-
-                  <div>
-                    <p className="text-sm text-gray-500">Status</p>
-                    <span
-                      className={`mt-2 inline-flex rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                        myNextContribution.status
-                      )}`}
-                    >
-                      {formatLabel(myNextContribution.status)}
-                    </span>
-                  </div>
-                </div>
-              ) : (
-                <p className="mt-4 text-sm leading-6 text-gray-500">
-                  You do not have a pending contribution yet.
-                </p>
-              )}
-            </div>
-
-            {myPayoutRound && (
-              <div className="rounded-3xl border border-emerald-100 bg-emerald-50 p-6 shadow-sm">
-                <h2 className="text-xl font-black text-emerald-900">
-                  My Expected Payout
-                </h2>
-
-                <p className="mt-2 text-sm text-emerald-700">
-                  Week {myPayoutRound.round_number} / Round{' '}
-                  {myPayoutRound.round_number}
-                </p>
-
-                <p className="mt-2 text-sm text-emerald-700">
-                  {formatDate(myPayoutRound.week_start_date)} -{' '}
-                  {formatDate(myPayoutRound.week_end_date)}
-                </p>
-
-                <span
-                  className={`mt-4 inline-flex rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                    myPayoutRound.status
-                  )}`}
-                >
-                  {formatLabel(myPayoutRound.status)}
-                </span>
-              </div>
-            )}
-
-            {myLatestPayout && (
-              <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
-                <h2 className="text-xl font-black text-gray-900">
-                  Latest Payout
-                </h2>
-
-                <div className="mt-5 space-y-4">
-                  <InfoPanel
-                    label="Net Amount"
-                    value={formatCurrency(myLatestPayout.net_amount)}
-                  />
-
-                  <InfoPanel
-                    label="Gross Amount"
-                    value={formatCurrency(myLatestPayout.gross_amount)}
-                  />
-
-                  <InfoPanel
-                    label="Platform Fee"
-                    value={formatCurrency(myLatestPayout.platform_fee)}
-                  />
-
-                  <div>
-                    <p className="text-sm text-gray-500">Status</p>
-                    <span
-                      className={`mt-2 inline-flex rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                        myLatestPayout.status
-                      )}`}
-                    >
-                      {formatLabel(myLatestPayout.status)}
-                    </span>
-                  </div>
-
-                  {myLatestPayout.payout_reference && (
-                    <p className="text-xs text-gray-500">
-                      Ref: {myLatestPayout.payout_reference}
-                    </p>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
-          <h2 className="text-xl font-black text-gray-900">
-            Payout Order Schedule
-          </h2>
-
-          <p className="mt-1 text-sm text-gray-500">
-            Weekly receiver order for this Fund Space group.
-          </p>
-
-          <div className="mt-6 overflow-hidden rounded-2xl border border-gray-100">
-            {payoutOrderSchedule.length === 0 ? (
-              <div className="p-6 text-center text-sm text-gray-500">
-                Payout order will appear when the group activates.
-              </div>
-            ) : (
-              <div className="divide-y divide-gray-100">
-                {payoutOrderSchedule.map((member) => {
-                  const round = member.matchingRound;
-
-                  return (
-                    <div
-                      key={member.id}
-                      className={`flex flex-col justify-between gap-4 p-4 md:flex-row md:items-center ${
-                        member.isMe
-                          ? 'bg-emerald-50'
-                          : member.isCurrentRecipient
-                            ? 'bg-blue-50'
-                            : 'bg-white'
-                      }`}
-                    >
-                      <div className="flex items-start gap-3">
-                        <div
-                          className={`flex h-11 w-11 items-center justify-center rounded-2xl text-sm font-black ${
-                            member.isMe
-                              ? 'bg-emerald-600 text-white'
-                              : member.isCurrentRecipient
-                                ? 'bg-blue-600 text-white'
-                                : 'bg-emerald-100 text-emerald-700'
-                          }`}
-                        >
-                          #{member.payoutOrder}
-                        </div>
-
-                        <div>
-                          <p className="font-bold text-gray-900">
-                            Week {member.payoutOrder} →{' '}
-                            {member.isMe
-                              ? 'You'
-                              : member.profile?.full_name ||
-                                `Member ${member.payoutOrder}`}
-                          </p>
-
-                          <p className="mt-1 text-xs text-gray-500">
-                            {member.profile?.phone || 'No phone'} • Joined:{' '}
-                            {formatDate(member.joined_at)}
-                          </p>
-
-                          {round ? (
-                            <p className="mt-1 text-xs text-gray-500">
-                              Round {round.round_number} •{' '}
-                              {formatDate(round.week_start_date)} -{' '}
-                              {formatDate(round.week_end_date)}
-                            </p>
-                          ) : (
-                            <p className="mt-1 text-xs text-gray-500">
-                              Round date will appear when generated.
-                            </p>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex flex-wrap gap-2">
-                        {member.isMe && (
-                          <span className="rounded-full border border-emerald-100 bg-white px-3 py-1 text-xs font-bold text-emerald-700">
-                            You
-                          </span>
-                        )}
-
-                        {member.isCurrentRecipient && (
-                          <span className="rounded-full border border-blue-100 bg-white px-3 py-1 text-xs font-bold text-blue-700">
-                            Current Recipient
-                          </span>
-                        )}
-
-                        {member.has_received_payout && (
-                          <span className="rounded-full border border-emerald-100 bg-white px-3 py-1 text-xs font-bold text-emerald-700">
-                            Received
-                          </span>
-                        )}
-
-                        <span
-                          className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                            round?.status || member.status
-                          )}`}
-                        >
-                          {formatLabel(round?.status || member.status || 'ACTIVE')}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="grid gap-6 xl:grid-cols-2">
-          <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
-            <h2 className="text-xl font-black text-gray-900">
-              My Contributions
-            </h2>
-
-            <div className="mt-6 overflow-hidden rounded-2xl border border-gray-100">
-              {myContributions.length === 0 ? (
-                <div className="p-6 text-center text-sm text-gray-500">
-                  No contribution records yet.
-                </div>
-              ) : (
-                <div className="divide-y divide-gray-100">
-                  {myContributions.map((item) => {
-                    const relatedManualSubmission =
-                      manualSubmissionByContributionId.get(item.id) || null;
-
-                    return (
-                      <div
-                        key={item.id}
-                        className="flex flex-col justify-between gap-3 p-4 sm:flex-row sm:items-center"
-                      >
-                        <div>
-                          <p className="font-semibold text-gray-900">
-                            Due: {formatCurrency(item.amount_due)}
-                          </p>
-
-                          <p className="text-xs text-gray-500">
-                            Paid: {formatCurrency(item.amount_paid)} • Created:{' '}
-                            {formatDate(item.created_at)}
-                          </p>
-
-                          {item.payment_reference && (
-                            <p className="mt-1 text-xs text-gray-500">
-                              Ref: {item.payment_reference}
-                            </p>
-                          )}
-
-                          {relatedManualSubmission?.status === 'PENDING_REVIEW' && (
-                            <p className="mt-1 text-xs font-semibold text-amber-700">
-                              MoMo reference awaiting admin verification:{' '}
-                              {relatedManualSubmission.transaction_reference}
-                            </p>
-                          )}
-
-                          {relatedManualSubmission?.status === 'REJECTED' && (
-                            <p className="mt-1 text-xs font-semibold text-red-700">
-                              Previous MoMo submission rejected.
-                            </p>
-                          )}
-                        </div>
-
-                        <span
-                          className={`w-fit rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                            relatedManualSubmission?.status === 'PENDING_REVIEW'
-                              ? 'PENDING_REVIEW'
-                              : item.status
-                          )}`}
-                        >
-                          {relatedManualSubmission?.status === 'PENDING_REVIEW'
-                            ? 'Awaiting Verification'
-                            : formatLabel(item.status)}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+            <div className="xl:col-span-2">
+              <PaymentAttemptRecords paymentAttempts={paymentAttempts} />
             </div>
           </div>
+        )}
 
-          <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
-            <h2 className="text-xl font-black text-gray-900">My Payouts</h2>
-
-            <div className="mt-6 overflow-hidden rounded-2xl border border-gray-100">
-              {myPayouts.length === 0 ? (
-                <div className="p-6 text-center text-sm text-gray-500">
-                  No payout record yet.
-                </div>
-              ) : (
-                <div className="divide-y divide-gray-100">
-                  {myPayouts.map((item) => (
-                    <div
-                      key={item.id}
-                      className="flex flex-col justify-between gap-3 p-4 sm:flex-row sm:items-center"
-                    >
-                      <div>
-                        <p className="font-semibold text-gray-900">
-                          Net: {formatCurrency(item.net_amount)}
-                        </p>
-
-                        <p className="text-xs text-gray-500">
-                          Gross: {formatCurrency(item.gross_amount)} • Fee:{' '}
-                          {formatCurrency(item.platform_fee)}
-                        </p>
-
-                        <p className="mt-1 text-xs text-gray-500">
-                          Created: {formatDate(item.created_at)}
-                        </p>
-
-                        {item.payout_reference && (
-                          <p className="mt-1 text-xs text-gray-500">
-                            Ref: {item.payout_reference}
-                          </p>
-                        )}
-                      </div>
-
-                      <span
-                        className={`w-fit rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                          item.status
-                        )}`}
-                      >
-                        {formatLabel(item.status)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
-          <h2 className="text-xl font-black text-gray-900">
-            Recent Online Payment Attempts
-          </h2>
-
-          <p className="mt-1 text-sm text-gray-500">
-            Online payment is currently disabled. Use Pay with MoMo for weekly
-            contribution verification.
-          </p>
-
-          <div className="mt-6 overflow-hidden rounded-2xl border border-gray-100">
-            {paymentAttempts.length === 0 ? (
-              <div className="p-6 text-center text-sm text-gray-500">
-                No online payment attempts yet.
-              </div>
-            ) : (
-              <div className="divide-y divide-gray-100">
-                {paymentAttempts.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex flex-col justify-between gap-3 p-4 sm:flex-row sm:items-center"
-                  >
-                    <div>
-                      <p className="font-semibold text-gray-900">
-                        {formatCurrency(item.amount)} • {formatLabel(item.provider)}
-                      </p>
-
-                      <p className="text-xs text-gray-500">
-                        Channel: {formatLabel(item.channel)} • Created:{' '}
-                        {formatDate(item.created_at)}
-                      </p>
-
-                      <p className="mt-1 text-xs text-gray-500">
-                        Ref:{' '}
-                        {item.provider_reference || item.internal_reference || 'Not set'}
-                      </p>
-                    </div>
-
-                    <span
-                      className={`w-fit rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                        item.status
-                      )}`}
-                    >
-                      {formatLabel(item.status)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-amber-100 bg-amber-50 p-6">
+        <div className="rounded-3xl border border-amber-100 bg-amber-50 p-5">
           <div className="flex items-start gap-3">
             <AlertCircle className="mt-1 h-5 w-5 shrink-0 text-amber-700" />
 
@@ -2003,6 +1426,39 @@ export default function FundSpaceDetailsPage() {
   );
 }
 
+function BackButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex items-center gap-2 text-sm font-semibold text-gray-500 hover:text-gray-900"
+    >
+      <ArrowLeft size={16} />
+      Back to Fund Space
+    </button>
+  );
+}
+
+function AlertMessage({
+  type,
+  children,
+}: {
+  type: 'success' | 'warning';
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={`flex items-start gap-3 rounded-2xl border p-4 text-sm font-semibold ${
+        type === 'success'
+          ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
+          : 'border-amber-100 bg-amber-50 text-amber-700'
+      }`}
+    >
+      {children}
+    </div>
+  );
+}
+
 function StatusPill({
   label,
   light = false,
@@ -2021,33 +1477,704 @@ function StatusPill({
   );
 }
 
-function SummaryCard({
-  title,
+function HeroMiniCard({
+  label,
   value,
-  icon,
+  helper,
 }: {
-  title: string;
+  label: string;
   value: string;
-  icon: ReactNode;
+  helper: string;
+}) {
+  return (
+    <div className="rounded-2xl bg-white/15 p-4 backdrop-blur">
+      <p className="text-sm text-emerald-50">{label}</p>
+      <p className="mt-1 break-words text-2xl font-black">{value}</p>
+      <p className="mt-1 text-xs text-emerald-50">{helper}</p>
+    </div>
+  );
+}
+
+function QuickPaymentCard({
+  paymentTargetContribution,
+  amountRemaining,
+  pendingManualSubmissionForTarget,
+  rejectedManualSubmissionForTarget,
+  pendingPaymentForTarget,
+  isMomoLockedForTarget,
+  canPayWithMomo,
+  canPayContribution,
+  verifyingPayment,
+  payingContribution,
+  onMomoPayment,
+  onOnlinePayment,
+}: {
+  paymentTargetContribution: Contribution | null;
+  amountRemaining: number;
+  pendingManualSubmissionForTarget: ManualPaymentSubmission | null;
+  rejectedManualSubmissionForTarget: ManualPaymentSubmission | null;
+  pendingPaymentForTarget: PaymentTransaction | null;
+  isMomoLockedForTarget: boolean;
+  canPayWithMomo: boolean;
+  canPayContribution: boolean;
+  verifyingPayment: boolean;
+  payingContribution: boolean;
+  onMomoPayment: () => void;
+  onOnlinePayment: () => void;
+}) {
+  return (
+    <section className="rounded-3xl border border-emerald-100 bg-white p-5 shadow-sm">
+      <div className="flex items-start gap-3">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
+          <Wallet className="h-5 w-5" />
+        </div>
+
+        <div className="min-w-0">
+          <h2 className="text-xl font-black text-gray-900">
+            Weekly Contribution
+          </h2>
+          <p className="mt-1 text-sm leading-6 text-gray-500">
+            Pay your contribution here without scrolling.
+          </p>
+        </div>
+      </div>
+
+      {paymentTargetContribution ? (
+        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          <InfoPanel
+            label="Amount Due"
+            value={formatCurrency(paymentTargetContribution.amount_due)}
+          />
+          <InfoPanel
+            label="Amount Paid"
+            value={formatCurrency(paymentTargetContribution.amount_paid)}
+          />
+          <InfoPanel label="Remaining" value={formatCurrency(amountRemaining)} />
+        </div>
+      ) : (
+        <div className="mt-5 rounded-2xl bg-gray-50 p-4 text-sm text-gray-500">
+          No pending contribution is available for payment.
+        </div>
+      )}
+
+      {pendingManualSubmissionForTarget && (
+        <div className="mt-4 flex items-start gap-3 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-700">
+          <Clock className="mt-0.5 h-5 w-5 shrink-0" />
+          <div>
+            <p className="font-black">MoMo payment awaiting verification</p>
+            <p className="mt-1 leading-6">
+              Your payment reference has already been submitted for admin review.
+            </p>
+            <p className="mt-2 text-xs font-semibold">
+              Reference: {pendingManualSubmissionForTarget.transaction_reference}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {rejectedManualSubmissionForTarget && !pendingManualSubmissionForTarget && (
+        <div className="mt-4 flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">
+          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+          <div>
+            <p className="font-black">Previous MoMo payment was rejected</p>
+            <p className="mt-1 leading-6">
+              You may submit a corrected MoMo payment reference.
+            </p>
+            {rejectedManualSubmissionForTarget.rejection_reason && (
+              <p className="mt-2 text-xs font-semibold">
+                Reason: {rejectedManualSubmissionForTarget.rejection_reason}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {pendingPaymentForTarget && (
+        <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-700">
+          <p className="font-bold">Pending online payment found</p>
+          <p className="mt-1">
+            Reference:{' '}
+            {pendingPaymentForTarget.provider_reference ||
+              pendingPaymentForTarget.internal_reference}
+          </p>
+        </div>
+      )}
+
+      <div className="mt-5 grid gap-3 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={onMomoPayment}
+          disabled={isMomoLockedForTarget || !canPayWithMomo || verifyingPayment}
+          className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <Smartphone className="h-4 w-4" />
+          {isMomoLockedForTarget ? 'Awaiting Verification' : 'Pay with MoMo'}
+        </button>
+
+        <button
+          type="button"
+          onClick={onOnlinePayment}
+          disabled
+          title="Online payment will be available soon. Please use Pay with MoMo for now."
+          className="inline-flex min-h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-gray-100 px-5 text-sm font-bold text-gray-400 shadow-sm"
+        >
+          {payingContribution ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <CreditCard className="h-4 w-4" />
+          )}
+          Pay Online
+        </button>
+      </div>
+
+      {isMomoLockedForTarget && (
+        <p className="mt-3 text-xs leading-5 text-amber-700">
+          Pay with MoMo is locked because this contribution already has a payment
+          request awaiting admin verification.
+        </p>
+      )}
+
+      {!canPayContribution && paymentTargetContribution && (
+        <p className="mt-3 text-xs leading-5 text-gray-500">
+          Payment may be unavailable because your account is not active, your role
+          cannot pay this contribution, the group is not active, or this
+          contribution is already paid.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function SectionTabs({
+  activeSection,
+  onChange,
+}: {
+  activeSection: ActiveSection;
+  onChange: (section: ActiveSection) => void;
+}) {
+  const tabs: { label: string; value: ActiveSection; helper: string }[] = [
+    {
+      label: 'Transparency',
+      value: 'transparency',
+      helper: 'Live round status',
+    },
+    {
+      label: 'Payout Schedule',
+      value: 'schedule',
+      helper: 'Round and recipient order',
+    },
+    {
+      label: 'My Records',
+      value: 'records',
+      helper: 'Contributions and payouts',
+    },
+  ];
+
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="grid gap-2 md:grid-cols-3">
+        {tabs.map((tab) => (
+          <button
+            key={tab.value}
+            type="button"
+            onClick={() => onChange(tab.value)}
+            className={`rounded-2xl px-4 py-3 text-left transition ${
+              activeSection === tab.value
+                ? 'bg-emerald-700 text-white'
+                : 'bg-slate-50 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700'
+            }`}
+          >
+            <p className="truncate text-sm font-black">{tab.label}</p>
+            <p
+              className={`mt-1 truncate text-xs font-semibold ${
+                activeSection === tab.value ? 'text-emerald-50' : 'text-slate-400'
+              }`}
+            >
+              {tab.helper}
+            </p>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CurrentRoundPanel({
+  currentRound,
+  currentRoundRecipient,
+  currentContribution,
+  currentContributionProgress,
+  profileId,
+}: {
+  currentRound: Round | null;
+  currentRoundRecipient: MemberWithProfile | null;
+  currentContribution: Contribution | null;
+  currentContributionProgress: number;
+  profileId: string | undefined;
 }) {
   return (
     <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
-      <div className="mb-4 inline-flex rounded-2xl bg-emerald-50 p-3 text-emerald-700">
-        {icon}
+      <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
+        <div>
+          <h2 className="text-xl font-black text-gray-900">
+            Current Round Overview
+          </h2>
+          <p className="mt-1 text-sm text-gray-500">
+            See who receives this round and your own payment status.
+          </p>
+        </div>
+
+        {currentRound && (
+          <span
+            className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
+              currentRound.status
+            )}`}
+          >
+            {formatLabel(currentRound.status)}
+          </span>
+        )}
       </div>
 
-      <p className="text-sm text-gray-500">{title}</p>
+      {currentRound ? (
+        <div className="mt-6 grid gap-4 md:grid-cols-2">
+          <InfoPanel label="Round Number" value={`Round ${currentRound.round_number}`} />
+          <InfoPanel
+            label="Contribution Deadline"
+            value={formatDate(currentRound.contribution_deadline)}
+          />
+          <InfoPanel
+            label="Week Period"
+            value={`${formatDate(currentRound.week_start_date)} - ${formatDate(
+              currentRound.week_end_date
+            )}`}
+          />
+          <InfoPanel
+            label="Expected Total"
+            value={formatCurrency(currentRound.expected_total_amount)}
+          />
 
-      <h3 className="mt-1 text-2xl font-black text-gray-900">{value}</h3>
+          <div className="rounded-2xl bg-emerald-50 p-4 md:col-span-2">
+            <div className="flex items-start gap-3">
+              <Trophy className="mt-1 h-5 w-5 shrink-0 text-emerald-700" />
+
+              <div>
+                <p className="text-sm text-emerald-700">
+                  Current Round Recipient
+                </p>
+                <p className="mt-1 text-lg font-black text-emerald-900">
+                  {currentRoundRecipient?.user_id === profileId
+                    ? 'You are the recipient for this round'
+                    : currentRoundRecipient?.profile?.full_name ||
+                      'Recipient not found'}
+                </p>
+                <p className="mt-1 text-xs text-emerald-700">
+                  {currentRoundRecipient?.profile?.phone || 'No phone'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-gray-100 p-4 md:col-span-2">
+            <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+              <div>
+                <p className="text-sm text-gray-500">My Payment For This Round</p>
+                <p className="mt-1 text-lg font-black text-gray-900">
+                  {currentContribution
+                    ? `${formatCurrency(
+                        currentContribution.amount_paid
+                      )} / ${formatCurrency(currentContribution.amount_due)}`
+                    : 'No contribution record found'}
+                </p>
+              </div>
+
+              {currentContribution && (
+                <span
+                  className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
+                    currentContribution.status
+                  )}`}
+                >
+                  {formatLabel(currentContribution.status)}
+                </span>
+              )}
+            </div>
+
+            {currentContribution && (
+              <>
+                <div className="mt-4 h-3 overflow-hidden rounded-full bg-gray-100">
+                  <div
+                    className="h-full rounded-full bg-emerald-600 transition-all"
+                    style={{ width: `${currentContributionProgress}%` }}
+                  />
+                </div>
+
+                <p className="mt-2 text-xs text-gray-500">
+                  Payment reference:{' '}
+                  {currentContribution.payment_reference || 'Not set'}
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="mt-6 rounded-2xl bg-gray-50 p-6 text-sm text-gray-500">
+          No current round yet. Rounds will appear when the group activates.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PayoutOrderSchedule({
+  schedule,
+  profileId,
+}: {
+  schedule: Array<
+    MemberWithProfile & {
+      payoutOrder: number;
+      matchingRound: Round | null;
+      isMe: boolean;
+      isCurrentRecipient: boolean;
+    }
+  >;
+  profileId: string | undefined;
+}) {
+  return (
+    <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm xl:col-span-2">
+      <h2 className="text-xl font-black text-gray-900">Payout Order Schedule</h2>
+
+      <p className="mt-1 text-sm text-gray-500">
+        Weekly receiver order for this Fund Space group.
+      </p>
+
+      <div className="mt-6 overflow-hidden rounded-2xl border border-gray-100">
+        {schedule.length === 0 ? (
+          <div className="p-6 text-center text-sm text-gray-500">
+            Payout order will appear when the group activates.
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {schedule.map((member) => {
+              const round = member.matchingRound;
+
+              return (
+                <div
+                  key={member.id}
+                  className={`flex flex-col justify-between gap-4 p-4 md:flex-row md:items-center ${
+                    member.isMe
+                      ? 'bg-emerald-50'
+                      : member.isCurrentRecipient
+                        ? 'bg-blue-50'
+                        : 'bg-white'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div
+                      className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-sm font-black ${
+                        member.isMe
+                          ? 'bg-emerald-600 text-white'
+                          : member.isCurrentRecipient
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-emerald-100 text-emerald-700'
+                      }`}
+                    >
+                      #{member.payoutOrder}
+                    </div>
+
+                    <div className="min-w-0">
+                      <p className="break-words font-bold text-gray-900">
+                        Week {member.payoutOrder} →{' '}
+                        {member.user_id === profileId
+                          ? 'You'
+                          : member.profile?.full_name ||
+                            `Member ${member.payoutOrder}`}
+                      </p>
+
+                      <p className="mt-1 text-xs text-gray-500">
+                        {member.profile?.phone || 'No phone'} • Joined:{' '}
+                        {formatDate(member.joined_at)}
+                      </p>
+
+                      {round ? (
+                        <p className="mt-1 text-xs text-gray-500">
+                          Round {round.round_number} •{' '}
+                          {formatDate(round.week_start_date)} -{' '}
+                          {formatDate(round.week_end_date)}
+                        </p>
+                      ) : (
+                        <p className="mt-1 text-xs text-gray-500">
+                          Round date will appear when generated.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {member.isMe && (
+                      <span className="rounded-full border border-emerald-100 bg-white px-3 py-1 text-xs font-bold text-emerald-700">
+                        You
+                      </span>
+                    )}
+
+                    {member.isCurrentRecipient && (
+                      <span className="rounded-full border border-blue-100 bg-white px-3 py-1 text-xs font-bold text-blue-700">
+                        Current Recipient
+                      </span>
+                    )}
+
+                    {member.has_received_payout && (
+                      <span className="rounded-full border border-emerald-100 bg-white px-3 py-1 text-xs font-bold text-emerald-700">
+                        Received
+                      </span>
+                    )}
+
+                    <span
+                      className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
+                        round?.status || member.status
+                      )}`}
+                    >
+                      {formatLabel(round?.status || member.status || 'ACTIVE')}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LatestPayoutCard({ payout }: { payout: Payout }) {
+  return (
+    <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
+      <h2 className="text-xl font-black text-gray-900">Latest Payout</h2>
+
+      <div className="mt-5 space-y-4">
+        <InfoPanel label="Net Amount" value={formatCurrency(payout.net_amount)} />
+        <InfoPanel label="Gross Amount" value={formatCurrency(payout.gross_amount)} />
+        <InfoPanel label="Platform Fee" value={formatCurrency(payout.platform_fee)} />
+
+        <div>
+          <p className="text-sm text-gray-500">Status</p>
+          <span
+            className={`mt-2 inline-flex rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
+              payout.status
+            )}`}
+          >
+            {formatLabel(payout.status)}
+          </span>
+        </div>
+
+        {payout.payout_reference && (
+          <p className="text-xs text-gray-500">Ref: {payout.payout_reference}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ContributionRecords({
+  myContributions,
+  manualSubmissionByContributionId,
+}: {
+  myContributions: Contribution[];
+  manualSubmissionByContributionId: Map<string, ManualPaymentSubmission>;
+}) {
+  return (
+    <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
+      <h2 className="text-xl font-black text-gray-900">My Contributions</h2>
+
+      <div className="mt-6 overflow-hidden rounded-2xl border border-gray-100">
+        {myContributions.length === 0 ? (
+          <div className="p-6 text-center text-sm text-gray-500">
+            No contribution records yet.
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {myContributions.map((item) => {
+              const relatedManualSubmission =
+                manualSubmissionByContributionId.get(item.id) || null;
+
+              return (
+                <div
+                  key={item.id}
+                  className="flex flex-col justify-between gap-3 p-4 sm:flex-row sm:items-center"
+                >
+                  <div>
+                    <p className="font-semibold text-gray-900">
+                      Due: {formatCurrency(item.amount_due)}
+                    </p>
+
+                    <p className="text-xs text-gray-500">
+                      Paid: {formatCurrency(item.amount_paid)} • Created:{' '}
+                      {formatDate(item.created_at)}
+                    </p>
+
+                    {item.payment_reference && (
+                      <p className="mt-1 text-xs text-gray-500">
+                        Ref: {item.payment_reference}
+                      </p>
+                    )}
+
+                    {relatedManualSubmission?.status === 'PENDING_REVIEW' && (
+                      <p className="mt-1 text-xs font-semibold text-amber-700">
+                        MoMo reference awaiting admin verification:{' '}
+                        {relatedManualSubmission.transaction_reference}
+                      </p>
+                    )}
+
+                    {relatedManualSubmission?.status === 'REJECTED' && (
+                      <p className="mt-1 text-xs font-semibold text-red-700">
+                        Previous MoMo submission rejected.
+                      </p>
+                    )}
+                  </div>
+
+                  <span
+                    className={`w-fit rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
+                      relatedManualSubmission?.status === 'PENDING_REVIEW'
+                        ? 'PENDING_REVIEW'
+                        : item.status
+                    )}`}
+                  >
+                    {relatedManualSubmission?.status === 'PENDING_REVIEW'
+                      ? 'Awaiting Verification'
+                      : formatLabel(item.status)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PayoutRecords({ myPayouts }: { myPayouts: Payout[] }) {
+  return (
+    <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
+      <h2 className="text-xl font-black text-gray-900">My Payouts</h2>
+
+      <div className="mt-6 overflow-hidden rounded-2xl border border-gray-100">
+        {myPayouts.length === 0 ? (
+          <div className="p-6 text-center text-sm text-gray-500">
+            No payout record yet.
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {myPayouts.map((item) => (
+              <div
+                key={item.id}
+                className="flex flex-col justify-between gap-3 p-4 sm:flex-row sm:items-center"
+              >
+                <div>
+                  <p className="font-semibold text-gray-900">
+                    Net: {formatCurrency(item.net_amount)}
+                  </p>
+
+                  <p className="text-xs text-gray-500">
+                    Gross: {formatCurrency(item.gross_amount)} • Fee:{' '}
+                    {formatCurrency(item.platform_fee)}
+                  </p>
+
+                  <p className="mt-1 text-xs text-gray-500">
+                    Created: {formatDate(item.created_at)}
+                  </p>
+
+                  {item.payout_reference && (
+                    <p className="mt-1 text-xs text-gray-500">
+                      Ref: {item.payout_reference}
+                    </p>
+                  )}
+                </div>
+
+                <span
+                  className={`w-fit rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
+                    item.status
+                  )}`}
+                >
+                  {formatLabel(item.status)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PaymentAttemptRecords({
+  paymentAttempts,
+}: {
+  paymentAttempts: PaymentTransaction[];
+}) {
+  return (
+    <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
+      <h2 className="text-xl font-black text-gray-900">
+        Recent Online Payment Attempts
+      </h2>
+
+      <p className="mt-1 text-sm text-gray-500">
+        Online payment is currently disabled. Use Pay with MoMo for weekly
+        contribution verification.
+      </p>
+
+      <div className="mt-6 overflow-hidden rounded-2xl border border-gray-100">
+        {paymentAttempts.length === 0 ? (
+          <div className="p-6 text-center text-sm text-gray-500">
+            No online payment attempts yet.
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {paymentAttempts.map((item) => (
+              <div
+                key={item.id}
+                className="flex flex-col justify-between gap-3 p-4 sm:flex-row sm:items-center"
+              >
+                <div>
+                  <p className="font-semibold text-gray-900">
+                    {formatCurrency(item.amount)} • {formatLabel(item.provider)}
+                  </p>
+
+                  <p className="text-xs text-gray-500">
+                    Channel: {formatLabel(item.channel)} • Created:{' '}
+                    {formatDate(item.created_at)}
+                  </p>
+
+                  <p className="mt-1 text-xs text-gray-500">
+                    Ref:{' '}
+                    {item.provider_reference ||
+                      item.internal_reference ||
+                      'Not set'}
+                  </p>
+                </div>
+
+                <span
+                  className={`w-fit rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
+                    item.status
+                  )}`}
+                >
+                  {formatLabel(item.status)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
 function InfoPanel({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl bg-gray-50 p-4">
-      <p className="text-sm text-gray-500">{label}</p>
-      <p className="mt-1 text-lg font-bold text-gray-900">{value}</p>
+    <div className="min-w-0 rounded-2xl bg-gray-50 p-4">
+      <p className="break-words text-sm text-gray-500">{label}</p>
+      <p className="mt-1 break-words text-lg font-bold leading-7 text-gray-900">
+        {value}
+      </p>
     </div>
   );
 }

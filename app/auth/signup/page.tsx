@@ -1,14 +1,21 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import type { FormEvent } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
+  ArrowLeft,
+  ArrowRight,
+  CheckCircle2,
   Eye,
   EyeOff,
+  HelpCircle,
   Loader2,
   ShieldCheck,
+  Smartphone,
   UserPlus,
+  Users,
   Wallet,
 } from 'lucide-react';
 
@@ -90,17 +97,6 @@ export default function SignupPage() {
         return;
       }
 
-      /*
-        The database trigger handle_new_user() should create the profile.
-        This update makes sure new customers are NOT marked as PENDING
-        before submitting verification.
-
-        Correct flow:
-        UNVERIFIED = created account, has not submitted verification
-        PENDING = submitted verification, waiting for admin review
-        VERIFIED = admin approved
-        REJECTED = admin rejected, user can resubmit
-      */
       const { error: profileUpdateError } = await supabase
         .from('profiles')
         .update({
@@ -159,101 +155,123 @@ export default function SignupPage() {
 
   return (
     <main className="min-h-screen bg-slate-50">
-      <div className="grid min-h-screen lg:grid-cols-2">
-        <section className="hidden bg-slate-950 px-12 py-10 text-white lg:flex lg:flex-col lg:justify-between">
-          <Link href="/" className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-600">
-              <Wallet size={24} />
-            </div>
-
-            <div>
-              <h1 className="text-xl font-bold leading-none">TrustPoint</h1>
-              <p className="text-sm font-medium text-blue-300">Fund Space</p>
-            </div>
-          </Link>
-
+      <div className="grid min-h-screen lg:grid-cols-[1fr_560px]">
+        <section className="hidden overflow-hidden bg-gradient-to-br from-emerald-950 via-emerald-900 to-emerald-800 px-10 py-8 text-white lg:flex lg:flex-col lg:justify-between xl:px-14">
           <div>
-            <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-blue-200">
-              <ShieldCheck size={16} />
-              Strict verification before joining groups
-            </div>
+            <Link href="/" className="inline-flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-emerald-900">
+                <Wallet className="h-6 w-6" />
+              </div>
 
-            <h2 className="max-w-xl text-5xl font-extrabold leading-tight">
-              Join a trusted digital contribution platform.
-            </h2>
+              <div>
+                <h1 className="text-xl font-black leading-none">TrustPoint</h1>
+                <p className="text-sm font-bold text-emerald-100">
+                  Fund Space
+                </p>
+              </div>
+            </Link>
+          </div>
 
-            <p className="mt-6 max-w-lg text-lg leading-8 text-slate-300">
-              Create your account, complete verification, choose a weekly
-              contribution plan, and let the system assign you to a secure
-              10-member Fund Space group.
+          <div className="max-w-2xl">
+            <p className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-black text-emerald-50">
+              <ShieldCheck className="h-4 w-4" />
+              Verification before joining groups
             </p>
 
-            <div className="mt-10 grid max-w-xl grid-cols-3 gap-4">
-              <div className="rounded-2xl bg-white/5 p-4">
-                <p className="text-2xl font-extrabold">10</p>
-                <p className="mt-1 text-sm text-slate-400">Members</p>
+            <h2 className="mt-6 break-words text-5xl font-black leading-tight">
+              Create your account and join a trusted contribution platform.
+            </h2>
+
+            <p className="mt-6 max-w-xl text-base font-semibold leading-8 text-emerald-50/80">
+              Sign up, complete verification, choose a weekly contribution plan,
+              and join a secure 10-member Fund Space group with transparent
+              payout order.
+            </p>
+
+            <div className="mt-10 grid max-w-xl gap-4 sm:grid-cols-3">
+              <div className="rounded-3xl border border-white/10 bg-white/10 p-4">
+                <Users className="h-5 w-5 text-emerald-100" />
+                <p className="mt-3 text-2xl font-black">10</p>
+                <p className="mt-1 text-sm font-semibold text-emerald-50/70">
+                  Members
+                </p>
               </div>
 
-              <div className="rounded-2xl bg-white/5 p-4">
-                <p className="text-2xl font-extrabold">Weekly</p>
-                <p className="mt-1 text-sm text-slate-400">Payments</p>
+              <div className="rounded-3xl border border-white/10 bg-white/10 p-4">
+                <Smartphone className="h-5 w-5 text-emerald-100" />
+                <p className="mt-3 text-2xl font-black">MoMo</p>
+                <p className="mt-1 text-sm font-semibold text-emerald-50/70">
+                  Payment records
+                </p>
               </div>
 
-              <div className="rounded-2xl bg-white/5 p-4">
-                <p className="text-2xl font-extrabold">Admin</p>
-                <p className="mt-1 text-sm text-slate-400">Approval</p>
+              <div className="rounded-3xl border border-white/10 bg-white/10 p-4">
+                <ShieldCheck className="h-5 w-5 text-emerald-100" />
+                <p className="mt-3 text-2xl font-black">Trust</p>
+                <p className="mt-1 text-sm font-semibold text-emerald-50/70">
+                  Verification
+                </p>
               </div>
             </div>
           </div>
 
-          <p className="text-sm text-slate-500">
-            © {new Date().getFullYear()} TrustPoint Fund Space
-          </p>
+          <div className="flex flex-wrap gap-4 text-sm font-black text-emerald-50/80">
+            <Link href="/" className="hover:text-white">
+              Home
+            </Link>
+            <Link href="/support" className="hover:text-white">
+              Support
+            </Link>
+            <Link href="/auth/login" className="hover:text-white">
+              Login
+            </Link>
+          </div>
         </section>
 
-        <section className="flex items-center justify-center px-6 py-10">
+        <section className="flex items-center justify-center px-4 py-8 md:px-8">
           <div className="w-full max-w-md">
-            <div className="mb-8 lg:hidden">
-              <Link href="/" className="flex items-center gap-3">
-                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-600 text-white">
-                  <Wallet size={24} />
-                </div>
+            <div className="mb-6 flex items-center justify-between gap-3">
+              <Link
+                href="/"
+                className="inline-flex min-h-10 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm hover:bg-slate-50"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Home
+              </Link>
 
-                <div>
-                  <h1 className="text-xl font-bold leading-none text-slate-950">
-                    TrustPoint
-                  </h1>
-                  <p className="text-sm font-medium text-blue-600">
-                    Fund Space
-                  </p>
-                </div>
+              <Link
+                href="/support"
+                className="inline-flex min-h-10 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm hover:bg-slate-50"
+              >
+                <HelpCircle className="h-4 w-4" />
+                Support
               </Link>
             </div>
 
-            <div className="rounded-3xl border bg-white p-6 shadow-sm sm:p-8">
+            <div className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
               <div className="mb-8">
-                <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
-                  <UserPlus size={24} />
+                <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
+                  <UserPlus className="h-6 w-6" />
                 </div>
 
-                <h2 className="text-2xl font-extrabold text-slate-950">
+                <h2 className="text-3xl font-black text-slate-950">
                   Create your account
                 </h2>
 
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                  Start by creating your account. After signup, you will complete
-                  strict verification before joining a Fund Space group.
+                <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+                  Start with your account details. After signup, you will
+                  complete verification before joining a Fund Space group.
                 </p>
               </div>
 
               {errorMessage && (
-                <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
                   {errorMessage}
                 </div>
               )}
 
               {successMessage && (
-                <div className="mb-5 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+                <div className="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700">
                   {successMessage}
                 </div>
               )}
@@ -262,7 +280,7 @@ export default function SignupPage() {
                 <div>
                   <label
                     htmlFor="fullName"
-                    className="mb-2 block text-sm font-semibold text-slate-700"
+                    className="mb-2 block text-sm font-black text-slate-700"
                   >
                     Full name
                   </label>
@@ -273,14 +291,14 @@ export default function SignupPage() {
                     value={fullName}
                     onChange={(event) => setFullName(event.target.value)}
                     placeholder="Enter your full name"
-                    className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-50"
+                    className="min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-semibold outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
                   />
                 </div>
 
                 <div>
                   <label
                     htmlFor="phone"
-                    className="mb-2 block text-sm font-semibold text-slate-700"
+                    className="mb-2 block text-sm font-black text-slate-700"
                   >
                     Phone number
                   </label>
@@ -291,14 +309,14 @@ export default function SignupPage() {
                     value={phone}
                     onChange={(event) => setPhone(event.target.value)}
                     placeholder="Example: 0240000000"
-                    className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-50"
+                    className="min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-semibold outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
                   />
                 </div>
 
                 <div>
                   <label
                     htmlFor="email"
-                    className="mb-2 block text-sm font-semibold text-slate-700"
+                    className="mb-2 block text-sm font-black text-slate-700"
                   >
                     Email address
                   </label>
@@ -309,14 +327,14 @@ export default function SignupPage() {
                     value={email}
                     onChange={(event) => setEmail(event.target.value)}
                     placeholder="Enter your email"
-                    className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-50"
+                    className="min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-semibold outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
                   />
                 </div>
 
                 <div>
                   <label
                     htmlFor="password"
-                    className="mb-2 block text-sm font-semibold text-slate-700"
+                    className="mb-2 block text-sm font-black text-slate-700"
                   >
                     Password
                   </label>
@@ -328,24 +346,28 @@ export default function SignupPage() {
                       value={password}
                       onChange={(event) => setPassword(event.target.value)}
                       placeholder="Create a password"
-                      className="w-full rounded-xl border border-slate-300 px-4 py-3 pr-12 text-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-50"
+                      className="min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 pr-12 text-sm font-semibold outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
                     />
 
                     <button
                       type="button"
                       onClick={() => setShowPassword((current) => !current)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
                     >
-                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                      {showPassword ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
                     </button>
                   </div>
 
-                  <p className="mt-2 text-xs text-slate-500">
+                  <p className="mt-2 text-xs font-semibold text-slate-500">
                     Password must be at least 6 characters.
                   </p>
                 </div>
 
-                <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
                   <input
                     type="checkbox"
                     checked={acceptedTerms}
@@ -355,7 +377,7 @@ export default function SignupPage() {
                     className="mt-1 h-4 w-4 rounded border-slate-300"
                   />
 
-                  <span className="text-sm leading-6 text-slate-600">
+                  <span className="text-sm font-semibold leading-6 text-emerald-800">
                     I agree that TrustPoint Fund Space is a rotational
                     contribution platform. I understand that I must complete
                     verification before joining a group, and if I join a Fund
@@ -366,18 +388,29 @@ export default function SignupPage() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
+                  className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-black text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-70"
                 >
-                  {loading && <Loader2 size={18} className="animate-spin" />}
+                  {loading && <Loader2 className="h-4 w-4 animate-spin" />}
                   {loading ? 'Creating account...' : 'Create Account'}
+                  {!loading && <ArrowRight className="h-4 w-4" />}
                 </button>
               </form>
 
-              <p className="mt-6 text-center text-sm text-slate-600">
+              <div className="mt-6 rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" />
+                  <p className="text-sm font-semibold leading-6 text-emerald-800">
+                    After signup, you will complete verification before joining
+                    an active Fund Space group.
+                  </p>
+                </div>
+              </div>
+
+              <p className="mt-6 text-center text-sm font-semibold text-slate-600">
                 Already have an account?{' '}
                 <Link
                   href="/auth/login"
-                  className="font-bold text-blue-600 hover:text-blue-700"
+                  className="font-black text-emerald-700 hover:text-emerald-800"
                 >
                   Login
                 </Link>

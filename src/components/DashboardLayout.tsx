@@ -126,6 +126,12 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
       description: 'Approve and record payouts',
     },
     {
+  href: '/admin/fund-space/disputes',
+  label: 'Fund Space Complaints',
+  icon: CircleHelp,
+  description: 'Review member and agent complaints',
+},
+    {
       href: '/admin/users',
       label: 'Members',
       icon: User,
@@ -181,6 +187,12 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
       description: 'Help customers pay weekly',
     },
     {
+  href: '/agent/fund-space/disputes',
+  label: 'Complaints',
+  icon: CircleHelp,
+  description: 'Report Fund Space issues',
+},
+    {
       href: '/agent/customers',
       label: 'Customers',
       icon: Users,
@@ -213,6 +225,12 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
       icon: Users,
       description: 'Groups and weekly payments',
     },
+    {
+  href: '/dashboard/fund-space/disputes',
+  label: 'Complaints',
+  icon: CircleHelp,
+  description: 'Report payment or payout issues',
+},
     {
       href: '/dashboard/transactions',
       label: 'Payment Records',

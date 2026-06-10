@@ -1,29 +1,40 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
+  ArrowRight,
+  BadgeCheck,
   CheckCircle2,
-  CircleDollarSign,
   Clock,
-  CreditCard,
   FileCheck2,
-  Info,
   Loader2,
+  Phone,
   RefreshCw,
   Search,
+  ShieldCheck,
   Smartphone,
+  TimerReset,
   UserRound,
+  Users,
   Wallet,
+  XCircle,
 } from 'lucide-react';
 
+import { ManualMerchantPaymentModal } from '@/components/fund-space/ManualMerchantPaymentModal';
 import { supabase } from '@/lib/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { ManualMerchantPaymentModal } from '@/components/fund-space/ManualMerchantPaymentModal';
+
+type FilterType =
+  | 'ALL'
+  | 'NEEDS_PAYMENT'
+  | 'PENDING_REVIEW'
+  | 'PAID'
+  | 'OVERDUE'
+  | 'FAILED';
 
 type Summary = {
   total_contributions: number;
@@ -60,9 +71,9 @@ type RoundLite = {
   recipient_user_id: string;
   contribution_amount: number;
   expected_total_amount: number;
-  contribution_deadline: string;
-  week_start_date: string;
-  week_end_date: string;
+  contribution_deadline: string | null;
+  week_start_date: string | null;
+  week_end_date: string | null;
   status: string;
 };
 
@@ -80,6 +91,10 @@ type Contribution = {
   status: string;
   created_at: string | null;
   updated_at: string | null;
+  payment_timing?: string | null;
+  is_late?: boolean | null;
+  late_fee_amount?: number | null;
+  late_fee_status?: string | null;
   customer: CustomerLite | null;
   fund_space: FundSpaceLite | null;
   round: RoundLite | null;
@@ -112,12 +127,18 @@ type ManualSubmissionsApiResponse = {
   submissions?: ManualPaymentSubmission[];
 };
 
-type VerifyPaymentResponse = {
-  success?: boolean;
-  message?: string;
-  already_processed?: boolean;
-  payment_status?: string;
-};
+const filters: { label: string; value: FilterType }[] = [
+  { label: 'All', value: 'ALL' },
+  { label: 'Needs Payment', value: 'NEEDS_PAYMENT' },
+  { label: 'Pending Review', value: 'PENDING_REVIEW' },
+  { label: 'Paid', value: 'PAID' },
+  { label: 'Overdue', value: 'OVERDUE' },
+  { label: 'Failed', value: 'FAILED' },
+];
+
+function normalize(value: string | null | undefined) {
+  return String(value || '').trim().toUpperCase();
+}
 
 function formatCurrency(amount: number | null | undefined) {
   return `GH₵${Number(amount || 0).toLocaleString('en-GH', {
@@ -131,15 +152,29 @@ function formatDate(dateString: string | null | undefined) {
 
   const date = new Date(dateString);
 
-  if (Number.isNaN(date.getTime())) {
-    return 'Invalid date';
-  }
+  if (Number.isNaN(date.getTime())) return 'Invalid date';
 
-  return new Intl.DateTimeFormat('en-GH', {
+  return date.toLocaleDateString('en-GH', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
-  }).format(date);
+  });
+}
+
+function formatDateTime(dateString: string | null | undefined) {
+  if (!dateString) return 'Not set';
+
+  const date = new Date(dateString);
+
+  if (Number.isNaN(date.getTime())) return 'Invalid date';
+
+  return date.toLocaleString('en-GH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function formatLabel(value: string | null | undefined) {
@@ -152,14 +187,14 @@ function formatLabel(value: string | null | undefined) {
 }
 
 function getStatusStyle(status: string | null | undefined) {
-  const value = String(status || 'PENDING').toUpperCase();
+  const value = normalize(status || 'PENDING');
 
   if (
     ['ACTIVE', 'VERIFIED', 'APPROVED', 'COMPLETED', 'PAID', 'SUCCESS'].includes(
       value
     )
   ) {
-    return 'border-emerald-100 bg-emerald-50 text-emerald-700';
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700';
   }
 
   if (
@@ -172,9 +207,10 @@ function getStatusStyle(status: string | null | undefined) {
       'PROCESSING',
       'PARTIALLY_PAID',
       'OVERDUE',
+      'LATE',
     ].includes(value)
   ) {
-    return 'border-amber-100 bg-amber-50 text-amber-700';
+    return 'border-amber-200 bg-amber-50 text-amber-700';
   }
 
   if (
@@ -183,96 +219,70 @@ function getStatusStyle(status: string | null | undefined) {
       'FAILED',
       'INACTIVE',
       'SUSPENDED',
-      'DEFAULTED',
-      'REFUNDED',
+      'BLACKLISTED',
       'CANCELLED',
-      'ABANDONED',
-      'REVERSED',
+      'DEFAULTED',
+      'REMOVED',
+      'MISSED',
     ].includes(value)
   ) {
-    return 'border-red-100 bg-red-50 text-red-700';
+    return 'border-red-200 bg-red-50 text-red-700';
   }
 
-  return 'border-gray-100 bg-gray-50 text-gray-700';
+  return 'border-slate-200 bg-slate-50 text-slate-700';
 }
 
-function getAmountRemaining(contribution: Contribution) {
+function getCustomerName(contribution: Contribution) {
+  return contribution.customer?.full_name || 'Unnamed customer';
+}
+
+function getCustomerPhone(contribution: Contribution) {
+  return contribution.customer?.phone || 'No phone';
+}
+
+function getCustomerLocation(contribution: Contribution) {
+  return (
+    contribution.customer?.location ||
+    contribution.customer?.city ||
+    contribution.customer?.region ||
+    'No location'
+  );
+}
+
+function getAmountRemaining(contribution: Contribution | null | undefined) {
+  if (!contribution) return 0;
+
   return Math.max(
     Number(contribution.amount_due || 0) - Number(contribution.amount_paid || 0),
     0
   );
 }
 
-function canPayContribution(contribution: Contribution) {
+function isPaymentOpen(contribution: Contribution) {
+  const status = normalize(contribution.status);
+  const remaining = getAmountRemaining(contribution);
+
   return (
-    ['PENDING', 'OVERDUE', 'PARTIALLY_PAID'].includes(
-      String(contribution.status || '').toUpperCase()
-    ) && getAmountRemaining(contribution) > 0
+    remaining > 0 &&
+    ['PENDING', 'PARTIALLY_PAID', 'OVERDUE', 'LATE', 'MISSED'].includes(status)
   );
 }
 
-function getPaymentReferenceFromUrl(searchParams: {
-  get: (name: string) => string | null;
-}) {
+function StatusPill({ status }: { status: string | null | undefined }) {
   return (
-    searchParams.get('payment_reference') ||
-    searchParams.get('reference') ||
-    searchParams.get('trxref') ||
-    ''
-  ).trim();
-}
-
-function sortManualSubmissionsByPriority(
-  submissions: ManualPaymentSubmission[]
-) {
-  return [...submissions].sort((a, b) => {
-    const aPending = a.status === 'PENDING_REVIEW' ? 1 : 0;
-    const bPending = b.status === 'PENDING_REVIEW' ? 1 : 0;
-
-    if (aPending !== bPending) return bPending - aPending;
-
-    const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
-    const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
-
-    return bTime - aTime;
-  });
-}
-
-function StatCard({
-  title,
-  value,
-  description,
-  icon,
-}: {
-  title: string;
-  value: string | number;
-  description: string;
-  icon: ReactNode;
-}) {
-  return (
-    <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-semibold text-gray-500">{title}</p>
-          <h3 className="mt-2 text-3xl font-bold text-gray-900">{value}</h3>
-          <p className="mt-1 text-sm leading-6 text-gray-500">{description}</p>
-        </div>
-
-        <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-700">
-          {icon}
-        </div>
-      </div>
-    </div>
+    <span
+      className={`inline-flex max-w-full items-center rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
+        status
+      )}`}
+    >
+      <span className="truncate">{formatLabel(status)}</span>
+    </span>
   );
 }
 
 export default function AgentFundSpaceContributionsPage() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
   const { toast } = useToast();
-  const verificationAttemptedRef = useRef(false);
 
-  const [contributions, setContributions] = useState<Contribution[]>([]);
   const [summary, setSummary] = useState<Summary>({
     total_contributions: 0,
     pending_contributions: 0,
@@ -282,50 +292,45 @@ export default function AgentFundSpaceContributionsPage() {
     total_amount_paid: 0,
   });
 
-  const [manualPaymentSubmissions, setManualPaymentSubmissions] = useState<
+  const [contributions, setContributions] = useState<Contribution[]>([]);
+  const [manualSubmissions, setManualSubmissions] = useState<
     ManualPaymentSubmission[]
   >([]);
 
   const [loading, setLoading] = useState(true);
-  const [verifyingPayment, setVerifyingPayment] = useState(false);
-  const [momoPaymentContribution, setMomoPaymentContribution] =
-    useState<Contribution | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const [filter, setFilter] = useState<'ALL' | 'PENDING' | 'PAID' | 'FAILED'>(
-    'ALL'
-  );
+  const [errorMessage, setErrorMessage] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [message, setMessage] = useState<{
-    type: 'success' | 'error' | 'info';
-    text: string;
-  } | null>(null);
+  const [activeFilter, setActiveFilter] = useState<FilterType>('ALL');
 
-  const getAccessToken = async () => {
+  const [selectedContribution, setSelectedContribution] =
+    useState<Contribution | null>(null);
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+
+  const getAccessToken = useCallback(async () => {
     const {
       data: { session },
       error,
     } = await supabase.auth.getSession();
 
     if (error || !session?.access_token) {
-      throw new Error('Your session has expired. Please login again.');
+      throw new Error('Your session has expired. Please log in again.');
     }
 
     return session.access_token;
-  };
+  }, []);
 
-  const loadManualPaymentSubmissions = useCallback(
-    async (contributionIds: string[]) => {
-      if (contributionIds.length === 0) {
-        setManualPaymentSubmissions([]);
-        return;
-      }
-
+  const loadManualSubmissions = useCallback(
+    async (token: string, contributionIds: string[]) => {
       try {
-        const token = await getAccessToken();
+        if (contributionIds.length === 0) {
+          setManualSubmissions([]);
+          return;
+        }
 
-        const params = new URLSearchParams({
-          contribution_ids: contributionIds.join(','),
-        });
+        const params = new URLSearchParams();
+        params.set('contribution_ids', contributionIds.slice(0, 120).join(','));
 
         const response = await fetch(
           `/api/agent/fund-space/manual-payment-submissions?${params.toString()}`,
@@ -337,749 +342,768 @@ export default function AgentFundSpaceContributionsPage() {
           }
         );
 
-        const result = (await response.json()) as ManualSubmissionsApiResponse;
+        const result = (await response.json().catch(() => null)) as
+          | ManualSubmissionsApiResponse
+          | null;
 
-        if (!response.ok || !result.success) {
-          throw new Error(
-            result.message || 'Unable to load MoMo verification submissions.'
-          );
+        if (!response.ok || !result?.success) {
+          setManualSubmissions([]);
+          return;
         }
 
-        setManualPaymentSubmissions(result.submissions || []);
+        setManualSubmissions(result.submissions || []);
       } catch (error) {
         console.warn(
-          'Agent manual MoMo submissions load warning:',
+          'Agent contribution manual submissions warning:',
           error instanceof Error ? error.message : error
         );
-
-        setManualPaymentSubmissions([]);
+        setManualSubmissions([]);
       }
     },
     []
   );
 
-  const loadContributions = useCallback(async () => {
-    try {
-      setLoading(true);
-      setMessage(null);
+  const loadContributions = useCallback(
+    async (showRefresh = false) => {
+      try {
+        if (showRefresh) {
+          setRefreshing(true);
+        } else {
+          setLoading(true);
+        }
 
-      const token = await getAccessToken();
-      const params = new URLSearchParams();
+        setErrorMessage('');
 
-      if (filter !== 'ALL') {
-        params.set('status', filter);
-      }
+        const token = await getAccessToken();
 
-      if (searchTerm.trim()) {
-        params.set('search', searchTerm.trim());
-      }
-
-      const response = await fetch(
-        `/api/agent/fund-space/contributions?${params.toString()}`,
-        {
+        const response = await fetch('/api/agent/fund-space/contributions', {
           method: 'GET',
           headers: {
             Authorization: `Bearer ${token}`,
           },
-        }
-      );
+        });
 
-      const result = (await response.json()) as ContributionsApiResponse;
+        const result = (await response.json().catch(() => null)) as
+          | ContributionsApiResponse
+          | null;
 
-      if (!response.ok || !result.success) {
-        throw new Error(result.message || 'Could not load contributions.');
-      }
-
-      const loadedContributions = result.contributions || [];
-
-      setContributions(loadedContributions);
-      setSummary(
-        result.summary || {
-          total_contributions: 0,
-          pending_contributions: 0,
-          paid_contributions: 0,
-          failed_contributions: 0,
-          total_amount_due: 0,
-          total_amount_paid: 0,
-        }
-      );
-
-      await loadManualPaymentSubmissions(
-        loadedContributions.map((item) => item.id)
-      );
-    } catch (error) {
-      setMessage({
-        type: 'error',
-        text:
-          error instanceof Error
-            ? error.message
-            : 'Something went wrong while loading contribution records.',
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [filter, searchTerm, loadManualPaymentSubmissions]);
-
-  const verifyReturnedPayment = useCallback(
-    async (reference: string) => {
-      if (!reference || verificationAttemptedRef.current) return;
-
-      verificationAttemptedRef.current = true;
-
-      try {
-        setVerifyingPayment(true);
-
-        const token = await getAccessToken();
-
-        const response = await fetch(
-          `/api/payments/verify?reference=${encodeURIComponent(reference)}`,
-          {
-            method: 'GET',
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          }
-        );
-
-        const result = (await response.json()) as VerifyPaymentResponse;
-
-        if (!response.ok || !result.success) {
+        if (!response.ok || !result?.success) {
           throw new Error(
-            result.message ||
-              'Payment could not be verified. Please refresh or contact support.'
+            result?.message || 'Unable to load customer contributions.'
           );
         }
 
-        const text = result.already_processed
-          ? 'This weekly contribution payment was already processed.'
-          : 'Weekly contribution payment verified successfully. The contribution has been updated.';
+        const loadedContributions = result.contributions || [];
 
-        setMessage({
-          type: 'success',
-          text,
-        });
+        setSummary(
+          result.summary || {
+            total_contributions: loadedContributions.length,
+            pending_contributions: loadedContributions.filter((item) =>
+              isPaymentOpen(item)
+            ).length,
+            paid_contributions: loadedContributions.filter(
+              (item) => normalize(item.status) === 'PAID'
+            ).length,
+            failed_contributions: loadedContributions.filter((item) =>
+              ['FAILED', 'REJECTED', 'MISSED'].includes(normalize(item.status))
+            ).length,
+            total_amount_due: loadedContributions.reduce(
+              (sum, item) => sum + Number(item.amount_due || 0),
+              0
+            ),
+            total_amount_paid: loadedContributions.reduce(
+              (sum, item) => sum + Number(item.amount_paid || 0),
+              0
+            ),
+          }
+        );
 
-        toast({
-          title: result.already_processed
-            ? 'Payment already processed'
-            : 'Contribution payment verified',
-          description: result.message || text,
-        });
+        setContributions(loadedContributions);
 
-        await loadContributions();
-
-        router.replace('/agent/fund-space/contributions');
+        await loadManualSubmissions(
+          token,
+          loadedContributions.map((item) => item.id)
+        );
       } catch (error) {
-        const text =
+        console.error('Agent contributions load error:', error);
+
+        setErrorMessage(
           error instanceof Error
             ? error.message
-            : 'Unable to verify returned payment.';
+            : 'Unable to load contribution queue.'
+        );
 
-        setMessage({
-          type: 'error',
-          text,
-        });
-
-        toast({
-          title: 'Payment verification failed',
-          description: text,
-          variant: 'destructive',
-        });
+        setContributions([]);
+        setManualSubmissions([]);
       } finally {
-        setVerifyingPayment(false);
+        setLoading(false);
+        setRefreshing(false);
       }
     },
-    [loadContributions, router, toast]
+    [getAccessToken, loadManualSubmissions]
   );
 
   useEffect(() => {
     loadContributions();
   }, [loadContributions]);
 
-  useEffect(() => {
-    if (loading) return;
-
-    const reference = getPaymentReferenceFromUrl(searchParams);
-
-    if (reference) {
-      verifyReturnedPayment(reference);
-    }
-  }, [loading, searchParams, verifyReturnedPayment]);
-
-  const visibleContributions = useMemo(() => {
-    const normalizedSearch = searchTerm.trim().toLowerCase();
-
-    if (!normalizedSearch) return contributions;
-
-    return contributions.filter((contribution) => {
-      const customer = contribution.customer;
-      const fundSpace = contribution.fund_space;
-      const round = contribution.round;
-
-      return (
-        customer?.full_name?.toLowerCase().includes(normalizedSearch) ||
-        customer?.phone?.toLowerCase().includes(normalizedSearch) ||
-        customer?.location?.toLowerCase().includes(normalizedSearch) ||
-        customer?.city?.toLowerCase().includes(normalizedSearch) ||
-        customer?.region?.toLowerCase().includes(normalizedSearch) ||
-        fundSpace?.name?.toLowerCase().includes(normalizedSearch) ||
-        String(round?.round_number || '').includes(normalizedSearch) ||
-        contribution.payment_reference?.toLowerCase().includes(normalizedSearch)
-      );
-    });
-  }, [contributions, searchTerm]);
-
   const manualSubmissionByContributionId = useMemo(() => {
     const map = new Map<string, ManualPaymentSubmission>();
 
-    for (const submission of sortManualSubmissionsByPriority(
-      manualPaymentSubmissions
-    )) {
+    const sorted = [...manualSubmissions].sort((a, b) => {
+      const aPending = normalize(a.status) === 'PENDING_REVIEW' ? 1 : 0;
+      const bPending = normalize(b.status) === 'PENDING_REVIEW' ? 1 : 0;
+
+      if (aPending !== bPending) return bPending - aPending;
+
+      const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+
+      return bTime - aTime;
+    });
+
+    for (const submission of sorted) {
       if (!map.has(submission.contribution_id)) {
         map.set(submission.contribution_id, submission);
       }
     }
 
     return map;
-  }, [manualPaymentSubmissions]);
+  }, [manualSubmissions]);
 
-  function handleOnlinePaymentComingSoon() {
-    const text =
-      'Online payment will be available soon. For now, please use Pay with MoMo and submit the transaction reference for verification.';
+  const stats = useMemo(() => {
+    const needsPayment = contributions.filter((item) => isPaymentOpen(item));
+    const paid = contributions.filter((item) => normalize(item.status) === 'PAID');
+    const overdue = contributions.filter((item) =>
+      ['OVERDUE', 'LATE', 'MISSED'].includes(normalize(item.status))
+    );
+    const pendingReview = contributions.filter((item) => {
+      const submission = manualSubmissionByContributionId.get(item.id);
 
-    setMessage({
-      type: 'info',
-      text,
+      return normalize(submission?.status) === 'PENDING_REVIEW';
+    });
+    const rejectedManual = contributions.filter((item) => {
+      const submission = manualSubmissionByContributionId.get(item.id);
+
+      return normalize(submission?.status) === 'REJECTED';
     });
 
-    toast({
-      title: 'Online payment coming soon',
-      description: text,
-    });
-  }
+    return {
+      total: contributions.length,
+      needsPayment: needsPayment.length,
+      paid: paid.length,
+      overdue: overdue.length,
+      pendingReview: pendingReview.length,
+      rejectedManual: rejectedManual.length,
+      amountDue: contributions.reduce(
+        (sum, item) => sum + Number(item.amount_due || 0),
+        0
+      ),
+      amountPaid: contributions.reduce(
+        (sum, item) => sum + Number(item.amount_paid || 0),
+        0
+      ),
+      amountRemaining: contributions.reduce(
+        (sum, item) => sum + getAmountRemaining(item),
+        0
+      ),
+    };
+  }, [contributions, manualSubmissionByContributionId]);
 
-  const handleMomoPaymentSubmitted = async () => {
-    const submittedContribution = momoPaymentContribution;
+  const filteredContributions = useMemo(() => {
+    const searchValue = searchTerm.trim().toLowerCase();
 
-    setMomoPaymentContribution(null);
+    return contributions.filter((contribution) => {
+      const manualSubmission = manualSubmissionByContributionId.get(
+        contribution.id
+      );
 
-    if (submittedContribution) {
-      setManualPaymentSubmissions((current) => {
-        const alreadyExists = current.some(
-          (item) =>
-            item.contribution_id === submittedContribution.id &&
-            item.status === 'PENDING_REVIEW'
+      const customerName = getCustomerName(contribution);
+      const customerPhone = getCustomerPhone(contribution);
+      const fundSpaceName = contribution.fund_space?.name || '';
+      const roundNumber = contribution.round?.round_number || '';
+
+      const matchesSearch =
+        !searchValue ||
+        [
+          customerName,
+          customerPhone,
+          getCustomerLocation(contribution),
+          fundSpaceName,
+          roundNumber,
+          contribution.status,
+          contribution.payment_reference,
+          manualSubmission?.transaction_reference,
+        ].some((value) =>
+          String(value || '').toLowerCase().includes(searchValue)
         );
 
-        if (alreadyExists) return current;
+      const status = normalize(contribution.status);
+      const manualStatus = normalize(manualSubmission?.status);
 
-        return [
-          {
-            id: `local-${submittedContribution.id}-${Date.now()}`,
-            contribution_id: submittedContribution.id,
-            fund_space_id: submittedContribution.fund_space_id,
-            user_id: submittedContribution.user_id,
-            agent_id: null,
-            status: 'PENDING_REVIEW',
-            transaction_reference: 'Submitted for verification',
-            total_amount_paid: getAmountRemaining(submittedContribution),
-            rejection_reason: null,
-            created_at: new Date().toISOString(),
-            reviewed_at: null,
-          },
-          ...current,
-        ];
-      });
-    }
+      const matchesFilter =
+        activeFilter === 'ALL' ||
+        (activeFilter === 'NEEDS_PAYMENT' &&
+          isPaymentOpen(contribution) &&
+          manualStatus !== 'PENDING_REVIEW') ||
+        (activeFilter === 'PENDING_REVIEW' &&
+          manualStatus === 'PENDING_REVIEW') ||
+        (activeFilter === 'PAID' && status === 'PAID') ||
+        (activeFilter === 'OVERDUE' &&
+          ['OVERDUE', 'LATE', 'MISSED'].includes(status)) ||
+        (activeFilter === 'FAILED' &&
+          ['FAILED', 'REJECTED', 'CANCELLED'].includes(status));
 
-    setMessage({
-      type: 'success',
-      text:
-        'MoMo payment reference submitted successfully. Pay with MoMo is locked until admin reviews the transaction.',
+      return matchesSearch && matchesFilter;
     });
+  }, [
+    activeFilter,
+    contributions,
+    manualSubmissionByContributionId,
+    searchTerm,
+  ]);
 
+  function openPaymentModal(contribution: Contribution) {
+    setSelectedContribution(contribution);
+    setPaymentModalOpen(true);
+  }
+
+  async function handlePaymentSubmitted() {
     toast({
       title: 'MoMo payment submitted',
       description:
-        'The transaction reference has been sent for admin verification.',
+        'The customer payment reference has been submitted for admin verification.',
     });
 
-    await loadContributions();
-  };
+    setSelectedContribution(null);
+    setPaymentModalOpen(false);
+    await loadContributions(true);
+  }
+
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-slate-50 px-4 py-6 md:px-8">
+        <div className="mx-auto flex min-h-[60vh] max-w-7xl items-center justify-center">
+          <div className="text-center">
+            <Loader2 className="mx-auto mb-4 h-10 w-10 animate-spin text-emerald-700" />
+            <h1 className="text-lg font-black text-slate-900">
+              Loading weekly contribution queue...
+            </h1>
+            <p className="mt-2 text-sm text-slate-500">
+              Please wait while TrustPoint loads your assigned customer payments.
+            </p>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <>
-      <div className="space-y-8">
-        <Link
-          href="/agent/fund-space"
-          className="inline-flex items-center gap-2 text-sm font-bold text-emerald-700 hover:text-emerald-800"
-        >
-          <ArrowLeft size={16} />
-          Back to Agent Fund Space
-        </Link>
-
-        <div className="rounded-3xl bg-gradient-to-r from-emerald-700 via-emerald-600 to-teal-600 p-6 text-white shadow-sm md:p-8">
-          <div className="flex flex-col justify-between gap-6 lg:flex-row lg:items-center">
-            <div className="max-w-3xl">
-              <p className="mb-3 inline-flex rounded-full bg-white/15 px-4 py-1 text-sm font-medium">
-                Fund Space Weekly Contributions
-              </p>
-
-              <h1 className="text-3xl font-bold md:text-4xl">
-                Customer weekly contributions
-              </h1>
-
-              <p className="mt-4 max-w-2xl text-sm leading-7 text-emerald-50 md:text-base">
-                Use this page to help assigned customers complete their weekly
-                Fund Space contribution. Once a MoMo reference is submitted, Pay
-                with MoMo will be locked until admin approves or rejects it.
-              </p>
-            </div>
+      <main className="min-h-screen bg-slate-50 px-4 py-5 md:px-8">
+        <div className="mx-auto max-w-7xl space-y-5">
+          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+            <Link
+              href="/agent"
+              className="inline-flex min-h-11 w-fit items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-100"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back to Agent Control Center
+            </Link>
 
             <button
               type="button"
-              onClick={loadContributions}
-              disabled={loading || verifyingPayment}
-              className="inline-flex min-h-12 w-fit items-center justify-center gap-2 rounded-xl bg-white/15 px-5 py-3 text-sm font-bold text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => loadContributions(true)}
+              disabled={refreshing}
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {loading ? (
-                <Loader2 size={16} className="animate-spin" />
+              {refreshing ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <RefreshCw size={16} />
+                <RefreshCw className="h-4 w-4" />
               )}
               Refresh
             </button>
           </div>
-        </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
-          <div className="rounded-3xl border border-emerald-100 bg-emerald-50 p-5">
-            <div className="flex gap-3">
-              <Smartphone className="mt-1 h-6 w-6 shrink-0 text-emerald-700" />
-              <div>
-                <h2 className="font-black text-emerald-900">
-                  Pay with MoMo
-                </h2>
-                <p className="mt-1 text-sm leading-6 text-emerald-700">
-                  Customer pays to the TrustPoint MoMo account, then the
-                  transaction reference is submitted for admin verification.
+          <section className="rounded-3xl bg-gradient-to-br from-emerald-800 via-emerald-700 to-teal-700 p-5 text-white shadow-sm md:p-8">
+            <div className="flex flex-col justify-between gap-6 xl:flex-row xl:items-center">
+              <div className="min-w-0 max-w-4xl">
+                <p className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-2 text-xs font-black">
+                  <Smartphone className="h-4 w-4" />
+                  Weekly Contribution Queue
                 </p>
+
+                <h1 className="break-words text-2xl font-black md:text-4xl">
+                  Collect customer Fund Space payments
+                </h1>
+
+                <p className="mt-4 max-w-3xl text-sm font-semibold leading-7 text-emerald-50 md:text-base">
+                  Use this page as your daily agent payment queue. See who has
+                  paid, who still needs to pay, and which MoMo references are
+                  waiting for admin verification.
+                </p>
+
+                <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <HeroStat label="Total Records" value={stats.total} />
+                  <HeroStat label="Need Payment" value={stats.needsPayment} />
+                  <HeroStat label="Pending Review" value={stats.pendingReview} />
+                  <HeroStat label="Paid" value={stats.paid} />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-3 sm:flex-row xl:flex-col">
+                <Link
+                  href="/agent/fund-space"
+                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-white px-5 text-sm font-black text-emerald-700 shadow-sm hover:bg-emerald-50"
+                >
+                  <Users className="h-4 w-4" />
+                  Customer Fund Space
+                </Link>
+
+                <Link
+                  href="/agent/customers"
+                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-white/15 px-5 text-sm font-black text-white transition hover:bg-white/20"
+                >
+                  <UserRound className="h-4 w-4" />
+                  View Customers
+                </Link>
               </div>
             </div>
-          </div>
+          </section>
 
-          <div className="rounded-3xl border border-amber-100 bg-amber-50 p-5">
-            <div className="flex gap-3">
-              <CreditCard className="mt-1 h-6 w-6 shrink-0 text-amber-700" />
-              <div>
-                <h2 className="font-black text-amber-900">
-                  Online Payment Coming Soon
+          {errorMessage && (
+            <section className="rounded-3xl border border-red-200 bg-red-50 p-5 text-sm font-bold text-red-700">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+                <div className="min-w-0">
+                  <p className="break-words">{errorMessage}</p>
+
+                  {errorMessage.toLowerCase().includes('session') && (
+                    <Link
+                      href="/auth/login"
+                      className="mt-3 inline-flex rounded-xl bg-white px-4 py-2 text-xs font-black text-red-700 shadow-sm"
+                    >
+                      Go to login
+                    </Link>
+                  )}
+                </div>
+              </div>
+            </section>
+          )}
+
+          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+            <StatCard
+              title="Total"
+              value={stats.total}
+              description="Contribution records"
+              icon={<FileCheck2 className="h-5 w-5" />}
+            />
+            <StatCard
+              title="Need Payment"
+              value={stats.needsPayment}
+              description="Open for MoMo payment"
+              icon={<Smartphone className="h-5 w-5" />}
+            />
+            <StatCard
+              title="Pending Review"
+              value={stats.pendingReview}
+              description="Admin must verify"
+              icon={<Clock className="h-5 w-5" />}
+            />
+            <StatCard
+              title="Paid"
+              value={stats.paid}
+              description="Confirmed paid"
+              icon={<CheckCircle2 className="h-5 w-5" />}
+            />
+            <StatCard
+              title="Overdue"
+              value={stats.overdue}
+              description="Late or missed"
+              icon={<TimerReset className="h-5 w-5" />}
+            />
+            <StatCard
+              title="Amount Paid"
+              value={formatCurrency(summary.total_amount_paid || stats.amountPaid)}
+              description="Confirmed payments"
+              icon={<Wallet className="h-5 w-5" />}
+            />
+            <StatCard
+              title="Remaining"
+              value={formatCurrency(stats.amountRemaining)}
+              description="Still expected"
+              icon={<BadgeCheck className="h-5 w-5" />}
+            />
+          </section>
+
+          <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+            <div className="grid gap-4 xl:grid-cols-[1fr_auto] xl:items-center">
+              <div className="min-w-0">
+                <h2 className="text-xl font-black text-slate-900">
+                  Payment Queue
                 </h2>
-                <p className="mt-1 text-sm leading-6 text-amber-700">
-                  Online checkout is temporarily disabled while TrustPoint focuses
-                  on verified MoMo contribution payments.
+                <p className="mt-1 text-sm font-semibold leading-6 text-slate-500">
+                  Search and filter customer contribution records. Use “Collect
+                  Payment” to submit a MoMo transaction reference.
                 </p>
               </div>
+
+              <Link
+                href="/agent/fund-space"
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-black text-white transition hover:bg-emerald-800"
+              >
+                Open Customer Fund Space
+                <ArrowRight className="h-4 w-4" />
+              </Link>
             </div>
-          </div>
 
-          <div className="rounded-3xl border border-gray-100 bg-gray-50 p-5">
-            <div className="flex gap-3">
-              <FileCheck2 className="mt-1 h-6 w-6 shrink-0 text-gray-700" />
-              <div>
-                <h2 className="font-black text-gray-900">
-                  Admin Verification
-                </h2>
-                <p className="mt-1 text-sm leading-6 text-gray-600">
-                  Contributions are marked as paid only after admin confirms the
-                  transaction from the TrustPoint merchant MoMo statement.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {message && (
-          <div
-            className={`flex items-start gap-3 rounded-2xl border p-4 text-sm font-semibold ${
-              message.type === 'success'
-                ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
-                : message.type === 'info'
-                  ? 'border-blue-100 bg-blue-50 text-blue-700'
-                  : 'border-red-100 bg-red-50 text-red-700'
-            }`}
-          >
-            {message.type === 'success' ? (
-              <CheckCircle2 className="mt-0.5 h-5 w-5 flex-none" />
-            ) : message.type === 'info' ? (
-              <Info className="mt-0.5 h-5 w-5 flex-none" />
-            ) : (
-              <AlertCircle className="mt-0.5 h-5 w-5 flex-none" />
-            )}
-            <p>{message.text}</p>
-          </div>
-        )}
-
-        {verifyingPayment && (
-          <div className="flex items-start gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm font-semibold text-emerald-700">
-            <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin" />
-            <span>
-              Verifying weekly contribution payment before updating the Fund
-              Space contribution record.
-            </span>
-          </div>
-        )}
-
-        <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-5">
-          <StatCard
-            title="Total Records"
-            value={summary.total_contributions}
-            description="All contribution records"
-            icon={<Wallet className="h-5 w-5" />}
-          />
-          <StatCard
-            title="Contribution Due"
-            value={summary.pending_contributions}
-            description="Waiting for weekly payment"
-            icon={<Clock className="h-5 w-5" />}
-          />
-          <StatCard
-            title="Paid"
-            value={summary.paid_contributions}
-            description="Verified payments"
-            icon={<CheckCircle2 className="h-5 w-5" />}
-          />
-          <StatCard
-            title="Amount Due"
-            value={formatCurrency(summary.total_amount_due)}
-            description="Expected weekly collection"
-            icon={<CircleDollarSign className="h-5 w-5" />}
-          />
-          <StatCard
-            title="Amount Paid"
-            value={formatCurrency(summary.total_amount_paid)}
-            description="Confirmed weekly collection"
-            icon={<CheckCircle2 className="h-5 w-5" />}
-          />
-        </section>
-
-        <section className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="relative w-full lg:max-w-md">
-              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <div className="relative mt-5">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    loadContributions();
-                  }
-                }}
-                placeholder="Search customer, phone, group, round, reference..."
-                className="w-full rounded-2xl border border-gray-200 bg-gray-50 py-3 pl-11 pr-4 text-sm outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-50"
+                placeholder="Search by customer name, phone, Fund Space, round, status, or reference..."
+                className="min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-bold text-slate-700 outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-50"
               />
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              {(['ALL', 'PENDING', 'PAID', 'FAILED'] as const).map((item) => (
+            <div className="mt-5 flex flex-wrap gap-2">
+              {filters.map((filter) => (
                 <button
-                  key={item}
+                  key={filter.value}
                   type="button"
-                  onClick={() => setFilter(item)}
-                  className={`rounded-xl px-4 py-2.5 text-sm font-bold transition ${
-                    filter === item
-                      ? 'bg-emerald-600 text-white shadow-sm hover:bg-emerald-700'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  onClick={() => setActiveFilter(filter.value)}
+                  className={`rounded-xl px-4 py-2.5 text-sm font-black transition ${
+                    activeFilter === filter.value
+                      ? 'bg-emerald-700 text-white shadow-sm hover:bg-emerald-800'
+                      : 'bg-slate-100 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700'
                   }`}
                 >
-                  {item === 'ALL'
-                    ? 'All'
-                    : item === 'PENDING'
-                      ? 'Contribution Due'
-                      : item === 'PAID'
-                        ? 'Paid'
-                        : 'Failed'}
+                  {filter.label}
                 </button>
               ))}
-
-              <button
-                type="button"
-                onClick={loadContributions}
-                className="rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-bold text-gray-700 transition hover:bg-gray-50"
-              >
-                Search
-              </button>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <section className="rounded-3xl border border-gray-100 bg-white shadow-sm">
-          {loading ? (
-            <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 p-8 text-center">
-              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50">
-                <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+          <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
+            {filteredContributions.length === 0 ? (
+              <EmptyQueueBlock />
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {filteredContributions.map((contribution) => {
+                  const manualSubmission = manualSubmissionByContributionId.get(
+                    contribution.id
+                  );
+
+                  return (
+                    <ContributionRow
+                      key={contribution.id}
+                      contribution={contribution}
+                      manualSubmission={manualSubmission || null}
+                      onCollect={() => openPaymentModal(contribution)}
+                    />
+                  );
+                })}
               </div>
-              <p className="text-sm font-medium text-gray-500">
-                Loading customer contributions...
-              </p>
-            </div>
-          ) : visibleContributions.length === 0 ? (
-            <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 p-8 text-center">
-              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-gray-50">
-                <Wallet className="h-8 w-8 text-gray-400" />
+            )}
+          </section>
+
+          <section className="rounded-3xl border border-amber-100 bg-amber-50 p-5">
+            <div className="flex items-start gap-3">
+              <ShieldCheck className="mt-1 h-5 w-5 shrink-0 text-amber-700" />
+
+              <div className="min-w-0">
+                <h2 className="text-base font-black text-amber-900">
+                  Payment collection reminder
+                </h2>
+
+                <p className="mt-2 break-words text-sm font-semibold leading-6 text-amber-700">
+                  Always confirm the customer’s name, phone number, amount, and
+                  MoMo transaction reference before submitting. Admin approval is
+                  required before a contribution becomes paid.
+                </p>
               </div>
-              <h2 className="text-lg font-bold text-gray-900">
-                No contribution records found
-              </h2>
-              <p className="max-w-md text-sm leading-6 text-gray-500">
-                Weekly contribution records will appear here when Fund Space
-                rounds are generated for your assigned customers.
-              </p>
             </div>
-          ) : (
-            <div className="divide-y divide-gray-100">
-              {visibleContributions.map((contribution) => {
-                const customer = contribution.customer;
-                const fundSpace = contribution.fund_space;
-                const round = contribution.round;
-                const remaining = getAmountRemaining(contribution);
-                const basePayable = canPayContribution(contribution);
-                const manualSubmission =
-                  manualSubmissionByContributionId.get(contribution.id) || null;
-                const pendingManualSubmission =
-                  manualSubmission?.status === 'PENDING_REVIEW'
-                    ? manualSubmission
-                    : null;
-                const rejectedManualSubmission =
-                  manualSubmission?.status === 'REJECTED'
-                    ? manualSubmission
-                    : null;
-                const payable = basePayable && !pendingManualSubmission;
+          </section>
+        </div>
+      </main>
 
-                return (
-                  <div key={contribution.id} className="p-5 md:p-6">
-                    <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-xl font-bold text-gray-900">
-                            {customer?.full_name || 'Unknown customer'}
-                          </h3>
-
-                          <span
-                            className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                              pendingManualSubmission
-                                ? 'PENDING_REVIEW'
-                                : contribution.status
-                            )}`}
-                          >
-                            {pendingManualSubmission
-                              ? 'Awaiting Verification'
-                              : formatLabel(contribution.status)}
-                          </span>
-
-                          {round && (
-                            <span className="rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
-                              Round {round.round_number}
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="mt-4 grid gap-3 text-sm text-gray-600 sm:grid-cols-2 lg:grid-cols-4">
-                          <div className="rounded-2xl bg-gray-50 p-4">
-                            <p className="text-xs font-semibold uppercase text-gray-400">
-                              Phone
-                            </p>
-                            <p className="mt-1 font-bold text-gray-800">
-                              {customer?.phone || 'Not provided'}
-                            </p>
-                          </div>
-
-                          <div className="rounded-2xl bg-gray-50 p-4">
-                            <p className="text-xs font-semibold uppercase text-gray-400">
-                              Amount Due
-                            </p>
-                            <p className="mt-1 font-bold text-gray-800">
-                              {formatCurrency(contribution.amount_due)}
-                            </p>
-                          </div>
-
-                          <div className="rounded-2xl bg-gray-50 p-4">
-                            <p className="text-xs font-semibold uppercase text-gray-400">
-                              Amount Paid
-                            </p>
-                            <p className="mt-1 font-bold text-gray-800">
-                              {formatCurrency(contribution.amount_paid)}
-                            </p>
-                          </div>
-
-                          <div className="rounded-2xl bg-gray-50 p-4">
-                            <p className="text-xs font-semibold uppercase text-gray-400">
-                              Remaining
-                            </p>
-                            <p className="mt-1 font-bold text-gray-800">
-                              {formatCurrency(remaining)}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="mt-4 rounded-2xl bg-gray-50 p-4 text-sm text-gray-600">
-                          <p>
-                            <span className="font-bold text-gray-800">
-                              Fund Space:
-                            </span>{' '}
-                            {fundSpace?.name || 'Not available'}
-                          </p>
-                          <p className="mt-1">
-                            <span className="font-bold text-gray-800">
-                              Deadline:
-                            </span>{' '}
-                            {formatDate(round?.contribution_deadline)}
-                          </p>
-                          <p className="mt-1">
-                            <span className="font-bold text-gray-800">
-                              Payment Ref:
-                            </span>{' '}
-                            {contribution.payment_reference || 'Not paid yet'}
-                          </p>
-                        </div>
-
-                        {pendingManualSubmission && (
-                          <div className="mt-4 flex items-start gap-3 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-700">
-                            <Clock className="mt-0.5 h-5 w-5 shrink-0" />
-                            <div>
-                              <p className="font-black">
-                                MoMo payment awaiting verification
-                              </p>
-                              <p className="mt-1 leading-6">
-                                This contribution already has a MoMo payment
-                                request awaiting admin review. Another reference
-                                cannot be submitted until admin rejects or
-                                approves it.
-                              </p>
-                              <p className="mt-2 text-xs font-semibold">
-                                Reference:{' '}
-                                {pendingManualSubmission.transaction_reference}
-                              </p>
-                            </div>
-                          </div>
-                        )}
-
-                        {rejectedManualSubmission && !pendingManualSubmission && (
-                          <div className="mt-4 flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">
-                            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
-                            <div>
-                              <p className="font-black">
-                                Previous MoMo payment was rejected
-                              </p>
-                              <p className="mt-1 leading-6">
-                                You can submit a corrected MoMo payment
-                                reference for this customer.
-                              </p>
-                              {rejectedManualSubmission.rejection_reason && (
-                                <p className="mt-2 text-xs font-semibold">
-                                  Reason:{' '}
-                                  {rejectedManualSubmission.rejection_reason}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="w-full rounded-3xl border border-gray-100 bg-gray-50 p-5 xl:w-[380px]">
-                        <div className="flex items-center gap-3">
-                          <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-700">
-                            <UserRound className="h-5 w-5" />
-                          </div>
-
-                          <div>
-                            <p className="text-sm font-bold text-gray-900">
-                              Weekly Contribution Action
-                            </p>
-                            <p className="text-xs text-gray-500">
-                              Use MoMo verification for now
-                            </p>
-                          </div>
-                        </div>
-
-                        {basePayable ? (
-                          <div className="mt-5 grid gap-3">
-                            <button
-                              type="button"
-                              disabled={!payable || verifyingPayment}
-                              onClick={() =>
-                                payable && setMomoPaymentContribution(contribution)
-                              }
-                              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-gray-300"
-                            >
-                              <Smartphone size={16} />
-                              {pendingManualSubmission
-                                ? 'Awaiting Verification'
-                                : 'Pay with MoMo'}
-                            </button>
-
-                            <button
-                              type="button"
-                              disabled
-                              title="Online payment will be available soon. Please use Pay with MoMo for now."
-                              onClick={handleOnlinePaymentComingSoon}
-                              className="group relative inline-flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl border border-gray-200 bg-gray-100 px-5 py-3 text-sm font-bold text-gray-400 shadow-sm"
-                            >
-                              <CreditCard size={16} />
-                              Pay Online
-
-                              <span className="pointer-events-none absolute -top-12 left-1/2 hidden w-72 -translate-x-1/2 rounded-xl bg-gray-900 px-3 py-2 text-xs font-semibold leading-5 text-white shadow-lg group-hover:block">
-                                Online payment will be available soon. Use Pay
-                                with MoMo for now.
-                              </span>
-                            </button>
-
-                            {pendingManualSubmission ? (
-                              <p className="text-xs leading-5 text-amber-700">
-                                Pay with MoMo is locked because a payment request
-                                is already awaiting admin verification.
-                              </p>
-                            ) : (
-                              <p className="text-xs leading-5 text-gray-500">
-                                The customer pays to the TrustPoint MoMo account.
-                                After submission, admin verifies the transaction
-                                before marking the contribution as paid.
-                              </p>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm font-semibold text-emerald-700">
-                            This contribution is already paid or not payable now.
-                          </div>
-                        )}
-
-                        <Link
-                          href={`/agent/fund-space/${contribution.user_id}`}
-                          className="mt-4 inline-flex w-full items-center justify-center rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-bold text-gray-700 transition hover:bg-gray-50"
-                        >
-                          View Customer Fund Space
-                        </Link>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-      </div>
-
-      {momoPaymentContribution && (
+      {selectedContribution && (
         <ManualMerchantPaymentModal
-          open={Boolean(momoPaymentContribution)}
-          onClose={() => setMomoPaymentContribution(null)}
-          onSubmitted={handleMomoPaymentSubmitted}
-          contributionId={momoPaymentContribution.id}
-          customerName={momoPaymentContribution.customer?.full_name}
-          amountDue={getAmountRemaining(momoPaymentContribution)}
-          title="Complete Customer MoMo Payment"
+          open={paymentModalOpen}
+          onClose={() => {
+            setPaymentModalOpen(false);
+            setSelectedContribution(null);
+          }}
+          onSubmitted={handlePaymentSubmitted}
+          contributionId={selectedContribution.id}
+          customerName={getCustomerName(selectedContribution)}
+          amountDue={getAmountRemaining(selectedContribution)}
+          title="Submit Customer Fund Space Payment"
         />
       )}
     </>
+  );
+}
+
+function HeroStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="min-w-0 rounded-2xl bg-white/15 px-4 py-3 backdrop-blur">
+      <p className="break-words text-xs font-bold text-emerald-50">{label}</p>
+      <p className="mt-1 text-2xl font-black text-white">{value}</p>
+    </div>
+  );
+}
+
+function StatCard({
+  title,
+  value,
+  icon,
+  description,
+}: {
+  title: string;
+  value: string | number;
+  icon: ReactNode;
+  description: string;
+}) {
+  return (
+    <div className="min-w-0 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-3 inline-flex rounded-2xl bg-emerald-50 p-3 text-emerald-700">
+        {icon}
+      </div>
+
+      <p className="break-words text-sm font-bold text-slate-500">{title}</p>
+      <h3 className="mt-1 break-words text-2xl font-black text-slate-900">
+        {value}
+      </h3>
+      <p className="mt-1 break-words text-xs font-semibold leading-5 text-slate-500">
+        {description}
+      </p>
+    </div>
+  );
+}
+
+function MiniInfo({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="min-w-0 rounded-2xl bg-slate-50 p-4">
+      <p className="break-words text-[11px] font-black uppercase tracking-wide text-slate-400">
+        {label}
+      </p>
+      <div className="mt-1 break-words text-sm font-bold leading-6 text-slate-800">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function ContributionRow({
+  contribution,
+  manualSubmission,
+  onCollect,
+}: {
+  contribution: Contribution;
+  manualSubmission: ManualPaymentSubmission | null;
+  onCollect: () => void;
+}) {
+  const customerName = getCustomerName(contribution);
+  const customerPhone = getCustomerPhone(contribution);
+  const customerLocation = getCustomerLocation(contribution);
+  const remaining = getAmountRemaining(contribution);
+
+  const manualStatus = normalize(manualSubmission?.status);
+  const contributionStatus = normalize(contribution.status);
+
+  const lockedByPendingReview = manualStatus === 'PENDING_REVIEW';
+  const canCollect = isPaymentOpen(contribution) && !lockedByPendingReview;
+
+  return (
+    <article className="p-5 md:p-6">
+      <div className="grid gap-5 xl:grid-cols-[1fr_340px]">
+        <div className="min-w-0">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-100 text-sm font-black text-emerald-700">
+                {customerName.slice(0, 1).toUpperCase()}
+              </div>
+
+              <div className="min-w-0">
+                <h3 className="break-words text-xl font-black text-slate-900">
+                  {customerName}
+                </h3>
+
+                <p className="mt-1 break-words text-sm font-semibold text-slate-500">
+                  {customerPhone} • {customerLocation}
+                </p>
+
+                <p className="mt-1 break-words text-xs font-semibold text-slate-500">
+                  {contribution.fund_space?.name || 'Fund Space'} • Round{' '}
+                  {contribution.round?.round_number || 'N/A'} • Deadline:{' '}
+                  {formatDate(contribution.round?.contribution_deadline)}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <StatusPill status={contribution.status} />
+              {manualSubmission && <StatusPill status={manualSubmission.status} />}
+              {contribution.payment_timing && (
+                <StatusPill status={contribution.payment_timing} />
+              )}
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <MiniInfo
+              label="Amount Due"
+              value={formatCurrency(contribution.amount_due)}
+            />
+            <MiniInfo
+              label="Amount Paid"
+              value={formatCurrency(contribution.amount_paid)}
+            />
+            <MiniInfo label="Remaining" value={formatCurrency(remaining)} />
+            <MiniInfo
+              label="Paid At"
+              value={formatDateTime(contribution.paid_at)}
+            />
+            <MiniInfo
+              label="Payment Method"
+              value={formatLabel(contribution.payment_method)}
+            />
+            <MiniInfo
+              label="Payment Reference"
+              value={contribution.payment_reference || 'Not set'}
+            />
+            <MiniInfo
+              label="Late Fee"
+              value={formatCurrency(contribution.late_fee_amount || 0)}
+            />
+            <MiniInfo
+              label="Late Fee Status"
+              value={formatLabel(contribution.late_fee_status)}
+            />
+          </div>
+
+          {manualSubmission && (
+            <div
+              className={`mt-5 rounded-3xl border p-5 ${
+                manualStatus === 'PENDING_REVIEW'
+                  ? 'border-amber-100 bg-amber-50 text-amber-800'
+                  : manualStatus === 'REJECTED'
+                    ? 'border-red-100 bg-red-50 text-red-800'
+                    : 'border-slate-200 bg-slate-50 text-slate-700'
+              }`}
+            >
+              <p className="text-sm font-black">
+                Manual MoMo Submission: {formatLabel(manualSubmission.status)}
+              </p>
+
+              <p className="mt-2 text-sm font-semibold leading-6">
+                Reference: {manualSubmission.transaction_reference} • Submitted:{' '}
+                {formatDateTime(manualSubmission.created_at)}
+              </p>
+
+              {manualSubmission.rejection_reason && (
+                <p className="mt-2 text-sm font-semibold leading-6">
+                  Rejection reason: {manualSubmission.rejection_reason}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+          <p className="mb-4 text-sm font-black text-slate-900">
+            Payment Action
+          </p>
+
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={onCollect}
+              disabled={!canCollect}
+              className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-black text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              <Smartphone className="h-4 w-4" />
+              {lockedByPendingReview
+                ? 'Awaiting Admin Review'
+                : contributionStatus === 'PAID'
+                  ? 'Already Paid'
+                  : 'Collect Payment'}
+            </button>
+
+            <Link
+              href={`/agent/fund-space/${contribution.user_id}`}
+              className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+            >
+              Open Customer Fund Space
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+
+            <Link
+              href={`/agent/customers/${contribution.user_id}`}
+              className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+            >
+              View Customer Profile
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          </div>
+
+          <div className="mt-5 grid gap-3">
+            <MiniInfo
+              label="Trust Visibility"
+              value={
+                normalize(contribution.customer?.verification_status) ===
+                'VERIFIED'
+                  ? 'Verified customer'
+                  : formatLabel(contribution.customer?.verification_status)
+              }
+            />
+
+            <MiniInfo
+              label="Transparency"
+              value={
+                contribution.fund_space
+                  ? `Round ${contribution.fund_space.current_round_number || 0}`
+                  : 'Not available'
+              }
+            />
+
+            <MiniInfo
+              label="Group Status"
+              value={formatLabel(contribution.fund_space?.status)}
+            />
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function EmptyQueueBlock() {
+  return (
+    <div className="flex min-h-[360px] flex-col items-center justify-center p-8 text-center">
+      <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-50">
+        <FileCheck2 className="h-9 w-9 text-slate-400" />
+      </div>
+
+      <h2 className="mt-4 text-lg font-black text-slate-900">
+        No contribution records found
+      </h2>
+
+      <p className="mt-2 max-w-md text-sm font-semibold leading-6 text-slate-500">
+        No customer contribution matches your current search or filter. Try
+        refreshing or changing the selected filter.
+      </p>
+
+      <Link
+        href="/agent/fund-space"
+        className="mt-5 inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-black text-white transition hover:bg-emerald-800"
+      >
+        Open Customer Fund Space
+        <ArrowRight className="h-4 w-4" />
+      </Link>
+    </div>
   );
 }

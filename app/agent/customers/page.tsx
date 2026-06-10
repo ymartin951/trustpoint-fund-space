@@ -1,17 +1,28 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  AlertCircle,
   ArrowRight,
   BadgeCheck,
+  CheckCircle2,
   Clock,
+  Eye,
+  Info,
   Loader2,
+  Mail,
+  MapPin,
+  Phone,
   RefreshCw,
   Search,
+  ShieldAlert,
   ShieldCheck,
+  Smartphone,
   Store,
   UserPlus,
+  UserRound,
   Users,
   WalletCards,
   XCircle,
@@ -46,11 +57,12 @@ type CustomerProfile = {
 
 type AgentCustomer = {
   relationship_id: string;
-  agent_id: string;
+  id: string;
+  agent_id: string | null;
   customer_id: string;
-  relationship_status: 'ACTIVE' | 'INACTIVE' | 'TRANSFERRED';
+  relationship_status: string | null;
   notes: string | null;
-  assigned_at: string | null;
+  created_at: string | null;
   updated_at: string | null;
   profile: CustomerProfile | null;
 };
@@ -58,7 +70,7 @@ type AgentCustomer = {
 type CustomersApiResponse = {
   success: boolean;
   message?: string;
-  customers?: AgentCustomer[];
+  customers?: unknown[];
   stats?: {
     total: number;
     active: number;
@@ -68,82 +80,288 @@ type CustomersApiResponse = {
   };
 };
 
-type FundSpaceMember = {
+type FundSpaceCustomer = {
   id: string;
-  user_id: string;
-  fund_space_id: string;
-  status: string | null;
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+  location: string | null;
+  city: string | null;
+  region: string | null;
+  occupation: string | null;
+  business_name: string | null;
+  business_type: string | null;
+  user_category: string;
+  status: string;
+  verification_status: string;
+  is_blacklisted: boolean;
+  created_at: string | null;
+  fund_space_member: {
+    id: string;
+    fund_space_id: string;
+    contribution_amount: number;
+    status: string;
+    joined_at: string | null;
+    joined_by_agent: string | null;
+    position_number: number | null;
+    payout_order: number | null;
+  } | null;
+  fund_space: {
+    id: string;
+    name: string;
+    contribution_amount: number;
+    status: string;
+    member_limit: number;
+    current_round_number: number;
+  } | null;
+  can_add_to_fund_space: boolean;
+  eligibility_reason: string;
 };
+
+type FundSpaceCustomersResponse = {
+  success: boolean;
+  message?: string;
+  summary?: {
+    total_customers: number;
+    verified_customers: number;
+    eligible_customers: number;
+    already_in_fund_space: number;
+    blocked_customers: number;
+  };
+  customers?: FundSpaceCustomer[];
+};
+
+type FilterType =
+  | 'ALL'
+  | 'ACTIVE'
+  | 'VERIFIED'
+  | 'PENDING'
+  | 'REJECTED'
+  | 'IN_FUND_SPACE'
+  | 'NOT_JOINED';
+
+const filterTabs: { label: string; value: FilterType }[] = [
+  { label: 'All', value: 'ALL' },
+  { label: 'Active', value: 'ACTIVE' },
+  { label: 'Verified', value: 'VERIFIED' },
+  { label: 'Pending KYC', value: 'PENDING' },
+  { label: 'Rejected', value: 'REJECTED' },
+  { label: 'In Fund Space', value: 'IN_FUND_SPACE' },
+  { label: 'Not Joined', value: 'NOT_JOINED' },
+];
+
+function normalize(value: string | null | undefined) {
+  return String(value || '').trim().toUpperCase();
+}
 
 function formatDate(dateString: string | null | undefined) {
   if (!dateString) return 'Not set';
 
-  return new Date(dateString).toLocaleDateString('en-GH', {
+  const date = new Date(dateString);
+
+  if (Number.isNaN(date.getTime())) return 'Invalid date';
+
+  return date.toLocaleDateString('en-GH', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
   });
 }
 
-function getStatusStyle(status: string | null | undefined) {
-  const value = status || 'PENDING';
-
-  if (['ACTIVE', 'VERIFIED', 'APPROVED', 'COMPLETED'].includes(value)) {
-    return 'bg-emerald-50 text-emerald-700 border-emerald-100';
-  }
-
-  if (['PENDING', 'UNVERIFIED', 'PENDING_VERIFICATION', 'UNDER_REVIEW'].includes(value)) {
-    return 'bg-amber-50 text-amber-700 border-amber-100';
-  }
-
-  if (['REJECTED', 'INACTIVE', 'SUSPENDED', 'BLACKLISTED'].includes(value)) {
-    return 'bg-red-50 text-red-700 border-red-100';
-  }
-
-  if (value === 'TRANSFERRED') {
-    return 'bg-purple-50 text-purple-700 border-purple-100';
-  }
-
-  return 'bg-gray-50 text-gray-700 border-gray-100';
+function formatCurrency(amount: number | null | undefined) {
+  return `GH₵${Number(amount || 0).toLocaleString('en-GH', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
-function prettyStatus(status: string | null | undefined) {
-  if (!status) return 'PENDING';
+function formatLabel(value: string | null | undefined) {
+  if (!value) return 'Not set';
 
-  return status
+  return value
     .replaceAll('_', ' ')
     .toLowerCase()
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function getCustomerInitial(profile: CustomerProfile | null) {
-  return (profile?.full_name || 'C').slice(0, 1).toUpperCase();
+function getStatusStyle(status: string | null | undefined) {
+  const value = normalize(status || 'PENDING');
+
+  if (
+    ['ACTIVE', 'VERIFIED', 'APPROVED', 'COMPLETED', 'PAID', 'SUCCESS'].includes(
+      value
+    )
+  ) {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  }
+
+  if (
+    [
+      'PENDING',
+      'UNVERIFIED',
+      'PENDING_VERIFICATION',
+      'UNDER_REVIEW',
+      'PENDING_REVIEW',
+      'FORMING',
+      'COLLECTING',
+    ].includes(value)
+  ) {
+    return 'border-amber-200 bg-amber-50 text-amber-700';
+  }
+
+  if (
+    [
+      'REJECTED',
+      'INACTIVE',
+      'SUSPENDED',
+      'BLACKLISTED',
+      'FAILED',
+      'CANCELLED',
+      'DEFAULTED',
+      'REMOVED',
+    ].includes(value)
+  ) {
+    return 'border-red-200 bg-red-50 text-red-700';
+  }
+
+  if (value === 'TRANSFERRED') {
+    return 'border-purple-200 bg-purple-50 text-purple-700';
+  }
+
+  return 'border-slate-200 bg-slate-50 text-slate-700';
 }
 
-function getCustomerName(profile: CustomerProfile | null) {
+function getTrustShieldLabel(profile: CustomerProfile | null) {
+  const verificationStatus = normalize(profile?.verification_status);
+  const accountStatus = normalize(profile?.status);
+
+  if (verificationStatus === 'VERIFIED' && accountStatus === 'ACTIVE') {
+    return 'Verified Trust Profile';
+  }
+
+  if (verificationStatus === 'VERIFIED') {
+    return 'Verified Identity';
+  }
+
+  if (
+    ['PENDING', 'UNVERIFIED', 'PENDING_VERIFICATION', 'UNDER_REVIEW'].includes(
+      verificationStatus
+    )
+  ) {
+    return 'Trust Review Pending';
+  }
+
+  if (['REJECTED', 'SUSPENDED', 'BLACKLISTED'].includes(verificationStatus)) {
+    return 'Trust Action Needed';
+  }
+
+  return 'Trust Shield Review';
+}
+
+function getTransparencyLabel(
+  joined: boolean,
+  fundSpaceCustomer: FundSpaceCustomer | null
+) {
+  if (!joined) return 'Not in Fund Space';
+
+  const groupStatus = normalize(fundSpaceCustomer?.fund_space?.status);
+
+  if (groupStatus === 'ACTIVE') return 'Live Group Active';
+  if (groupStatus === 'FORMING') return 'Group Forming';
+  if (groupStatus === 'COMPLETED') return 'Group Completed';
+  if (groupStatus === 'PAUSED') return 'Group Paused';
+
+  return 'Transparency Available';
+}
+
+function getProfileName(profile: CustomerProfile | null) {
   return profile?.full_name || 'Unnamed customer';
 }
 
-function getCustomerPhone(profile: CustomerProfile | null) {
-  return profile?.phone || 'No phone number';
+function getProfileInitial(profile: CustomerProfile | null) {
+  return getProfileName(profile).slice(0, 1).toUpperCase();
 }
 
-function getCustomerLocation(profile: CustomerProfile | null) {
+function getProfilePhone(profile: CustomerProfile | null) {
+  return profile?.phone || 'No phone';
+}
+
+function getProfileLocation(profile: CustomerProfile | null) {
+  if (!profile) return 'No location';
+
   return (
-    profile?.location ||
-    profile?.city ||
-    profile?.region ||
-    profile?.country ||
+    profile.location ||
+    profile.city ||
+    profile.region ||
+    profile.country ||
     'No location'
   );
 }
 
-function getCustomerOccupation(profile: CustomerProfile | null) {
+function getProfileWork(profile: CustomerProfile | null) {
+  if (!profile) return 'Not provided';
+
   return (
-    profile?.occupation ||
-    profile?.business_name ||
-    profile?.business_type ||
+    profile.business_name ||
+    profile.business_type ||
+    profile.occupation ||
     'Not provided'
+  );
+}
+
+function isInFundSpace(
+  customerId: string,
+  fundSpaceCustomerMap: Map<string, FundSpaceCustomer>
+) {
+  const item = fundSpaceCustomerMap.get(customerId);
+
+  return Boolean(item?.fund_space_member || item?.fund_space);
+}
+
+function normalizeCustomerFromApi(item: any): AgentCustomer {
+  const profile = (item.profile || item.customer || null) as CustomerProfile | null;
+
+  const customerId =
+    item.customer_id ||
+    item.profile?.id ||
+    item.customer?.id ||
+    item.id ||
+    profile?.id ||
+    '';
+
+  const relationshipId = item.relationship_id || item.agent_customer?.id || item.id;
+
+  return {
+    relationship_id: relationshipId,
+    id: relationshipId,
+    agent_id: item.agent_id || item.agent_customer?.agent_id || null,
+    customer_id: customerId,
+    relationship_status:
+      item.relationship_status ||
+      item.agent_customer?.relationship_status ||
+      item.status ||
+      'ACTIVE',
+    notes: item.notes || item.agent_customer?.notes || null,
+    created_at:
+      item.assigned_at ||
+      item.created_at ||
+      item.agent_customer?.created_at ||
+      profile?.created_at ||
+      null,
+    updated_at: item.updated_at || item.agent_customer?.updated_at || null,
+    profile,
+  };
+}
+
+function StatusPill({ status }: { status: string | null | undefined }) {
+  return (
+    <span
+      className={`inline-flex max-w-full items-center rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
+        status
+      )}`}
+    >
+      <span className="truncate">{formatLabel(status)}</span>
+    </span>
   );
 }
 
@@ -151,14 +369,101 @@ export default function AgentCustomersPage() {
   const { profile, loading } = useAuth();
 
   const [customers, setCustomers] = useState<AgentCustomer[]>([]);
-  const [fundSpaceMembers, setFundSpaceMembers] = useState<FundSpaceMember[]>([]);
+  const [fundSpaceCustomers, setFundSpaceCustomers] = useState<
+    FundSpaceCustomer[]
+  >([]);
+
   const [pageLoading, setPageLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
   const [searchTerm, setSearchTerm] = useState('');
-  const [verificationFilter, setVerificationFilter] = useState('ALL');
-  const [statusFilter, setStatusFilter] = useState('ALL');
-  const [fundSpaceFilter, setFundSpaceFilter] = useState('ALL');
+  const [activeFilter, setActiveFilter] = useState<FilterType>('ALL');
+
+  const getAccessToken = useCallback(async () => {
+    const {
+      data: { session },
+      error,
+    } = await supabase.auth.getSession();
+
+    if (error || !session?.access_token) {
+      throw new Error('Your session has expired. Please log in again.');
+    }
+
+    return session.access_token;
+  }, []);
+
+  const loadCustomers = useCallback(
+    async (showRefresh = false) => {
+      try {
+        if (showRefresh) {
+          setRefreshing(true);
+        } else {
+          setPageLoading(true);
+        }
+
+        setErrorMessage('');
+
+        const token = await getAccessToken();
+
+        const [customersResponse, fundSpaceResponse] = await Promise.all([
+          fetch('/api/agent/customers', {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }),
+          fetch('/api/agent/fund-space/customers', {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }),
+        ]);
+
+        const customersResult = (await customersResponse.json().catch(
+          () => null
+        )) as CustomersApiResponse | null;
+
+        if (!customersResponse.ok || !customersResult?.success) {
+          throw new Error(
+            customersResult?.message || 'Unable to load your customers.'
+          );
+        }
+
+        const fundSpaceResult = (await fundSpaceResponse.json().catch(
+          () => null
+        )) as FundSpaceCustomersResponse | null;
+
+        setCustomers(
+          (customersResult.customers || []).map((item) =>
+            normalizeCustomerFromApi(item)
+          )
+        );
+
+        if (fundSpaceResponse.ok && fundSpaceResult?.success) {
+          setFundSpaceCustomers(fundSpaceResult.customers || []);
+        } else {
+          setFundSpaceCustomers([]);
+        }
+      } catch (error) {
+        console.error('Agent customers load error:', error);
+
+        setErrorMessage(
+          error instanceof Error
+            ? error.message
+            : 'Unable to load customers.'
+        );
+
+        setCustomers([]);
+        setFundSpaceCustomers([]);
+      } finally {
+        setPageLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [getAccessToken]
+  );
 
   useEffect(() => {
     if (loading) return;
@@ -170,590 +475,700 @@ export default function AgentCustomersPage() {
     }
 
     loadCustomers();
-  }, [loading, profile?.id]);
+  }, [loading, profile?.id, loadCustomers]);
 
-  const loadCustomers = async () => {
-    try {
-      setPageLoading(true);
-      setErrorMessage('');
-
-      const {
-        data: { session },
-        error: sessionError,
-      } = await supabase.auth.getSession();
-
-      if (sessionError) {
-        throw new Error(sessionError.message || 'Could not check your login session.');
-      }
-
-      if (!session?.access_token) {
-        throw new Error('Your session has expired. Please log in again.');
-      }
-
-      const response = await fetch('/api/agent/customers', {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
-      });
-
-      const responseText = await response.text();
-
-      let result: CustomersApiResponse = {
-        success: false,
-        message: 'Unable to load customers.',
-      };
-
-      try {
-        result = responseText ? JSON.parse(responseText) : result;
-      } catch {
-        result = {
-          success: false,
-          message: 'The server returned an invalid response while loading customers.',
-        };
-      }
-
-      if (!response.ok || !result.success) {
-        throw new Error(result.message || 'Unable to load customers.');
-      }
-
-      const loadedCustomers = result.customers || [];
-      setCustomers(loadedCustomers);
-
-      const customerUserIds = loadedCustomers
-        .map((customer) => customer.customer_id)
-        .filter(Boolean);
-
-      if (customerUserIds.length === 0) {
-        setFundSpaceMembers([]);
-        return;
-      }
-
-      const { data: memberData, error: memberError } = await supabase
-        .from('fund_space_members')
-        .select('id, user_id, fund_space_id, status')
-        .in('user_id', customerUserIds);
-
-      if (memberError) {
-        console.warn('Fund Space member load warning:', memberError.message);
-        setFundSpaceMembers([]);
-        return;
-      }
-
-      setFundSpaceMembers((memberData || []) as FundSpaceMember[]);
-    } catch (error: unknown) {
-      console.error('Agent customers load error:', error);
-
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Unable to load customers.';
-
-      setErrorMessage(message);
-    } finally {
-      setPageLoading(false);
-    }
-  };
-
-  const fundSpaceCustomerIds = useMemo(() => {
-    return new Set(fundSpaceMembers.map((member) => member.user_id));
-  }, [fundSpaceMembers]);
+  const fundSpaceCustomerMap = useMemo(() => {
+    return new Map(fundSpaceCustomers.map((item) => [item.id, item]));
+  }, [fundSpaceCustomers]);
 
   const stats = useMemo(() => {
     const total = customers.length;
 
-    const pending = customers.filter((customer) =>
-      ['PENDING', 'UNVERIFIED', 'PENDING_VERIFICATION', 'UNDER_REVIEW'].includes(
-        customer.profile?.verification_status || ''
+    const active = customers.filter(
+      (customer) =>
+        normalize(customer.relationship_status) === 'ACTIVE' ||
+        normalize(customer.profile?.status) === 'ACTIVE'
+    ).length;
+
+    const verified = customers.filter((customer) =>
+      ['VERIFIED', 'APPROVED'].includes(
+        normalize(customer.profile?.verification_status)
       )
     ).length;
 
-    const verified = customers.filter(
-      (customer) => customer.profile?.verification_status === 'VERIFIED'
+    const pending = customers.filter((customer) =>
+      ['PENDING', 'UNVERIFIED', 'PENDING_VERIFICATION', 'UNDER_REVIEW'].includes(
+        normalize(customer.profile?.verification_status)
+      )
     ).length;
 
-    const rejected = customers.filter(
-      (customer) => customer.profile?.verification_status === 'REJECTED'
+    const rejected = customers.filter((customer) =>
+      ['REJECTED', 'SUSPENDED', 'BLACKLISTED'].includes(
+        normalize(customer.profile?.verification_status)
+      )
     ).length;
 
-    const active = customers.filter(
-      (customer) => customer.relationship_status === 'ACTIVE'
+    const inFundSpace = customers.filter((customer) =>
+      isInFundSpace(customer.customer_id, fundSpaceCustomerMap)
     ).length;
 
-    const inFundSpace = customers.filter(
-      (customer) => customer.customer_id && fundSpaceCustomerIds.has(customer.customer_id)
-    ).length;
+    const notJoined = Math.max(total - inFundSpace, 0);
 
     return {
       total,
-      pending,
-      verified,
-      rejected,
       active,
+      verified,
+      pending,
+      rejected,
       inFundSpace,
+      notJoined,
     };
-  }, [customers, fundSpaceCustomerIds]);
+  }, [customers, fundSpaceCustomerMap]);
 
   const filteredCustomers = useMemo(() => {
+    const searchValue = searchTerm.trim().toLowerCase();
+
     return customers.filter((customer) => {
       const profileData = customer.profile;
-
-      const fullName = profileData?.full_name || '';
-      const phone = profileData?.phone || '';
-      const location =
-        profileData?.location ||
-        profileData?.city ||
-        profileData?.region ||
-        '';
-      const occupation = profileData?.occupation || '';
-      const businessType = profileData?.business_type || '';
-      const businessName = profileData?.business_name || '';
-      const verificationStatus = profileData?.verification_status || '';
-      const relationshipStatus = customer.relationship_status || '';
-
-      const searchValue = searchTerm.toLowerCase();
+      const verificationStatus = normalize(profileData?.verification_status);
+      const relationshipStatus = normalize(customer.relationship_status);
+      const accountStatus = normalize(profileData?.status);
+      const joined = isInFundSpace(customer.customer_id, fundSpaceCustomerMap);
 
       const matchesSearch =
-        fullName.toLowerCase().includes(searchValue) ||
-        phone.toLowerCase().includes(searchValue) ||
-        location.toLowerCase().includes(searchValue) ||
-        occupation.toLowerCase().includes(searchValue) ||
-        businessType.toLowerCase().includes(searchValue) ||
-        businessName.toLowerCase().includes(searchValue) ||
-        verificationStatus.toLowerCase().includes(searchValue) ||
-        relationshipStatus.toLowerCase().includes(searchValue);
+        !searchValue ||
+        [
+          profileData?.full_name,
+          profileData?.phone,
+          profileData?.email,
+          profileData?.country,
+          profileData?.region,
+          profileData?.city,
+          profileData?.location,
+          profileData?.occupation,
+          profileData?.business_name,
+          profileData?.business_type,
+          profileData?.business_location,
+          profileData?.user_category,
+          profileData?.verification_status,
+          profileData?.status,
+          customer.relationship_status,
+        ].some((value) => String(value || '').toLowerCase().includes(searchValue));
 
-      const matchesVerification =
-        verificationFilter === 'ALL' ||
-        profileData?.verification_status === verificationFilter;
+      const matchesFilter =
+        activeFilter === 'ALL' ||
+        (activeFilter === 'ACTIVE' &&
+          (relationshipStatus === 'ACTIVE' || accountStatus === 'ACTIVE')) ||
+        (activeFilter === 'VERIFIED' &&
+          ['VERIFIED', 'APPROVED'].includes(verificationStatus)) ||
+        (activeFilter === 'PENDING' &&
+          [
+            'PENDING',
+            'UNVERIFIED',
+            'PENDING_VERIFICATION',
+            'UNDER_REVIEW',
+          ].includes(verificationStatus)) ||
+        (activeFilter === 'REJECTED' &&
+          ['REJECTED', 'SUSPENDED', 'BLACKLISTED'].includes(
+            verificationStatus
+          )) ||
+        (activeFilter === 'IN_FUND_SPACE' && joined) ||
+        (activeFilter === 'NOT_JOINED' && !joined);
 
-      const matchesStatus =
-        statusFilter === 'ALL' || customer.relationship_status === statusFilter;
-
-      const isInFundSpace =
-        !!customer.customer_id && fundSpaceCustomerIds.has(customer.customer_id);
-
-      const matchesFundSpace =
-        fundSpaceFilter === 'ALL' ||
-        (fundSpaceFilter === 'YES' && isInFundSpace) ||
-        (fundSpaceFilter === 'NO' && !isInFundSpace);
-
-      return (
-        matchesSearch &&
-        matchesVerification &&
-        matchesStatus &&
-        matchesFundSpace
-      );
+      return matchesSearch && matchesFilter;
     });
-  }, [
-    customers,
-    searchTerm,
-    verificationFilter,
-    statusFilter,
-    fundSpaceFilter,
-    fundSpaceCustomerIds,
-  ]);
+  }, [activeFilter, customers, fundSpaceCustomerMap, searchTerm]);
 
   if (loading || pageLoading) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center px-4">
-        <div className="text-center">
-          <Loader2 className="mx-auto mb-4 h-10 w-10 animate-spin text-emerald-600" />
-          <p className="text-sm text-gray-500">Loading customers...</p>
+      <main className="min-h-screen bg-slate-50 px-4 py-6 md:px-8">
+        <div className="mx-auto flex min-h-[60vh] max-w-7xl items-center justify-center">
+          <div className="text-center">
+            <Loader2 className="mx-auto mb-4 h-10 w-10 animate-spin text-emerald-700" />
+            <h1 className="text-lg font-black text-slate-900">
+              Loading customers...
+            </h1>
+            <p className="mt-2 text-sm text-slate-500">
+              Please wait while TrustPoint loads your registered customers.
+            </p>
+          </div>
         </div>
-      </div>
+      </main>
     );
   }
 
   return (
-    <div className="space-y-6 md:space-y-8">
-      <div className="rounded-3xl bg-gradient-to-r from-emerald-700 via-emerald-600 to-teal-600 p-5 text-white shadow-sm md:p-8">
-        <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
-          <div>
-            <p className="mb-3 inline-flex rounded-full bg-white/15 px-4 py-1 text-xs font-medium md:text-sm">
-              Agent Customers
-            </p>
-
-            <h1 className="text-2xl font-bold md:text-4xl">
-              My Customers
-            </h1>
-
-            <p className="mt-3 max-w-2xl text-sm leading-7 text-emerald-50 md:text-base">
-              View, search, and manage customers assigned to you. Use this page to track verification,
-              activity, and Fund Space participation.
-            </p>
-          </div>
-
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <button
-              type="button"
-              onClick={loadCustomers}
-              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-emerald-700 hover:bg-emerald-50"
-            >
-              <RefreshCw size={16} />
-              Refresh
-            </button>
-
-            <Link
-              href="/agent/register-customer"
-              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-emerald-950/40 px-5 py-3 text-sm font-bold text-white ring-1 ring-white/20 hover:bg-emerald-950/60"
-            >
-              <UserPlus size={16} />
-              Register Customer
-            </Link>
-          </div>
-        </div>
-      </div>
-
-      {errorMessage && (
-        <div className="rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">
-          {errorMessage}
-        </div>
-      )}
-
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
-        <div className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm md:p-6">
-          <Users className="mb-4 h-7 w-7 text-emerald-600" />
-          <p className="text-sm text-gray-500">Total Customers</p>
-          <h3 className="mt-1 text-3xl font-black text-gray-900">{stats.total}</h3>
-        </div>
-
-        <div className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm md:p-6">
-          <Clock className="mb-4 h-7 w-7 text-amber-600" />
-          <p className="text-sm text-gray-500">Pending</p>
-          <h3 className="mt-1 text-3xl font-black text-gray-900">{stats.pending}</h3>
-        </div>
-
-        <div className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm md:p-6">
-          <ShieldCheck className="mb-4 h-7 w-7 text-emerald-600" />
-          <p className="text-sm text-gray-500">Verified</p>
-          <h3 className="mt-1 text-3xl font-black text-gray-900">{stats.verified}</h3>
-        </div>
-
-        <div className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm md:p-6">
-          <XCircle className="mb-4 h-7 w-7 text-red-600" />
-          <p className="text-sm text-gray-500">Rejected</p>
-          <h3 className="mt-1 text-3xl font-black text-gray-900">{stats.rejected}</h3>
-        </div>
-
-        <div className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm md:p-6">
-          <BadgeCheck className="mb-4 h-7 w-7 text-emerald-600" />
-          <p className="text-sm text-gray-500">Active</p>
-          <h3 className="mt-1 text-3xl font-black text-gray-900">{stats.active}</h3>
-        </div>
-
-        <div className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm md:p-6">
-          <WalletCards className="mb-4 h-7 w-7 text-emerald-600" />
-          <p className="text-sm text-gray-500">In Fund Space</p>
-          <h3 className="mt-1 text-3xl font-black text-gray-900">{stats.inFundSpace}</h3>
-        </div>
-      </div>
-
-      <div className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm md:p-6">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div>
-            <h2 className="text-lg font-bold text-gray-900 md:text-xl">
-              Customer Records
-            </h2>
-            <p className="mt-1 text-sm text-gray-500">
-              Search and filter your assigned customers.
-            </p>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-4 xl:min-w-[900px]">
-            <div className="relative md:col-span-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-
-              <input
-                type="text"
-                placeholder="Search customers..."
-                value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
-                className="min-h-12 w-full rounded-xl border border-gray-200 py-3 pl-10 pr-4 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-              />
-            </div>
-
-            <select
-              value={verificationFilter}
-              onChange={(event) => setVerificationFilter(event.target.value)}
-              className="min-h-12 rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-            >
-              <option value="ALL">All Verification</option>
-              <option value="PENDING">Pending</option>
-              <option value="UNVERIFIED">Unverified</option>
-              <option value="PENDING_VERIFICATION">Pending Verification</option>
-              <option value="UNDER_REVIEW">Under Review</option>
-              <option value="VERIFIED">Verified</option>
-              <option value="REJECTED">Rejected</option>
-            </select>
-
-            <select
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value)}
-              className="min-h-12 rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-            >
-              <option value="ALL">All Links</option>
-              <option value="ACTIVE">Active</option>
-              <option value="INACTIVE">Inactive</option>
-              <option value="TRANSFERRED">Transferred</option>
-            </select>
-
-            <select
-              value={fundSpaceFilter}
-              onChange={(event) => setFundSpaceFilter(event.target.value)}
-              className="min-h-12 rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-            >
-              <option value="ALL">All Fund Space</option>
-              <option value="YES">In Fund Space</option>
-              <option value="NO">Not In Fund Space</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Mobile-first cards */}
-        <div className="mt-6 space-y-4 lg:hidden">
-          {filteredCustomers.length === 0 ? (
-            <div className="rounded-2xl border border-gray-100 p-8 text-center">
-              <Store className="mx-auto mb-4 h-10 w-10 text-gray-300" />
-              <h3 className="font-bold text-gray-900">No customers found</h3>
-              <p className="mt-2 text-sm text-gray-500">
-                No customer matches your search or filter.
+    <main className="min-h-screen bg-slate-50 px-4 py-5 md:px-8">
+      <div className="mx-auto max-w-7xl space-y-5">
+        <section className="rounded-3xl bg-gradient-to-br from-emerald-800 via-emerald-700 to-teal-700 p-5 text-white shadow-sm md:p-8">
+          <div className="flex flex-col justify-between gap-6 xl:flex-row xl:items-center">
+            <div className="min-w-0 max-w-4xl">
+              <p className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-2 text-xs font-black">
+                <Users className="h-4 w-4" />
+                Agent Customers
               </p>
 
+              <h1 className="break-words text-2xl font-black md:text-4xl">
+                Manage your registered customers
+              </h1>
+
+              <p className="mt-4 max-w-3xl text-sm font-semibold leading-7 text-emerald-50 md:text-base">
+                Search customers, check their verification status, review their
+                profile, and continue to Fund Space payment collection when they
+                are already joined.
+              </p>
+
+              <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <HeroStat label="Total Customers" value={stats.total} />
+                <HeroStat label="Verified" value={stats.verified} />
+                <HeroStat label="In Fund Space" value={stats.inFundSpace} />
+                <HeroStat label="Not Joined" value={stats.notJoined} />
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row xl:flex-col">
               <Link
                 href="/agent/register-customer"
-                className="mt-5 inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white hover:bg-emerald-700"
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-white px-5 text-sm font-black text-emerald-700 shadow-sm hover:bg-emerald-50"
               >
+                <UserPlus className="h-4 w-4" />
                 Register Customer
-                <UserPlus size={16} />
               </Link>
+
+              <button
+                type="button"
+                onClick={() => loadCustomers(true)}
+                disabled={refreshing}
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-white/15 px-5 text-sm font-black text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {refreshing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+                Refresh
+              </button>
             </div>
-          ) : (
-            filteredCustomers.map((customer) => {
-              const customerProfile = customer.profile;
-              const isInFundSpace =
-                !!customer.customer_id && fundSpaceCustomerIds.has(customer.customer_id);
+          </div>
+        </section>
 
-              return (
-                <div
-                  key={customer.relationship_id}
-                  className="rounded-3xl border border-gray-100 bg-white p-4 shadow-sm"
-                >
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-sm font-bold text-emerald-700">
-                      {getCustomerInitial(customerProfile)}
-                    </div>
+        {errorMessage && (
+          <section className="rounded-3xl border border-red-200 bg-red-50 p-5 text-sm font-bold text-red-700">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+              <div className="min-w-0">
+                <p className="break-words">{errorMessage}</p>
 
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate font-bold text-gray-900">
-                        {getCustomerName(customerProfile)}
-                      </p>
-                      <p className="mt-1 text-sm text-gray-500">
-                        {getCustomerPhone(customerProfile)}
-                      </p>
-                      <p className="mt-1 text-xs text-gray-500">
-                        {getCustomerLocation(customerProfile)}
-                      </p>
-                    </div>
-                  </div>
+                {errorMessage.toLowerCase().includes('session') && (
+                  <Link
+                    href="/auth/login"
+                    className="mt-3 inline-flex rounded-xl bg-white px-4 py-2 text-xs font-black text-red-700 shadow-sm"
+                  >
+                    Go to login
+                  </Link>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
 
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <span
-                      className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                        customerProfile?.verification_status
-                      )}`}
-                    >
-                      {prettyStatus(customerProfile?.verification_status)}
-                    </span>
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+          <StatCard
+            title="Total"
+            value={stats.total}
+            description="All customers"
+            icon={<Users className="h-5 w-5" />}
+          />
 
-                    <span
-                      className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                        customer.relationship_status
-                      )}`}
-                    >
-                      {prettyStatus(customer.relationship_status)}
-                    </span>
+          <StatCard
+            title="Active"
+            value={stats.active}
+            description="Active relationship"
+            icon={<CheckCircle2 className="h-5 w-5" />}
+          />
 
-                    <span
-                      className={`rounded-full border px-3 py-1 text-xs font-bold ${
-                        isInFundSpace
-                          ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
-                          : 'border-gray-100 bg-gray-50 text-gray-600'
-                      }`}
-                    >
-                      {isInFundSpace ? 'In Fund Space' : 'Not In Fund Space'}
-                    </span>
-                  </div>
+          <StatCard
+            title="Verified"
+            value={stats.verified}
+            description="Approved KYC"
+            icon={<ShieldCheck className="h-5 w-5" />}
+          />
 
-                  <div className="mt-4 grid gap-2 text-sm">
-                    <div className="rounded-2xl bg-gray-50 p-3">
-                      <p className="text-gray-500">Occupation / Business</p>
-                      <p className="font-semibold text-gray-900">
-                        {getCustomerOccupation(customerProfile)}
-                      </p>
-                    </div>
+          <StatCard
+            title="Pending"
+            value={stats.pending}
+            description="Waiting review"
+            icon={<Clock className="h-5 w-5" />}
+          />
 
-                    <div className="rounded-2xl bg-gray-50 p-3">
-                      <p className="text-gray-500">Registered</p>
-                      <p className="font-semibold text-gray-900">
-                        {formatDate(customer.assigned_at)}
-                      </p>
-                    </div>
-                  </div>
+          <StatCard
+            title="Rejected"
+            value={stats.rejected}
+            description="Needs correction"
+            icon={<ShieldAlert className="h-5 w-5" />}
+          />
 
-                  <div className="mt-4">
-                    <Link
-                      href={`/agent/customers/${customer.customer_id}`}
-                      className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700"
-                    >
-                      View Details
-                      <ArrowRight size={15} />
-                    </Link>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
+          <StatCard
+            title="In Fund Space"
+            value={stats.inFundSpace}
+            description="Payment active"
+            icon={<WalletCards className="h-5 w-5" />}
+          />
 
-        {/* Desktop table */}
-        <div className="mt-6 hidden overflow-hidden rounded-2xl border border-gray-100 lg:block">
-          {filteredCustomers.length === 0 ? (
-            <div className="p-10 text-center">
-              <Store className="mx-auto mb-4 h-10 w-10 text-gray-300" />
-              <h3 className="text-lg font-bold text-gray-900">No customers found</h3>
-              <p className="mt-2 text-sm text-gray-500">
-                No customer matches your search or filter.
+          <StatCard
+            title="Not Joined"
+            value={stats.notJoined}
+            description="Check eligibility"
+            icon={<XCircle className="h-5 w-5" />}
+          />
+        </section>
+
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+          <div className="grid gap-4 xl:grid-cols-[1fr_auto] xl:items-center">
+            <div className="min-w-0">
+              <h2 className="text-xl font-black text-slate-900">
+                Customer List
+              </h2>
+              <p className="mt-1 text-sm font-semibold leading-6 text-slate-500">
+                Open a customer profile to review identity, Trust Shield, and
+                Fund Space eligibility.
               </p>
             </div>
+
+            <Link
+              href="/agent/fund-space"
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-black text-white transition hover:bg-emerald-800"
+            >
+              Customer Fund Space
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          </div>
+
+          <div className="relative mt-5">
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder="Search by name, phone, email, location, business, or status..."
+              className="min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-bold text-slate-700 outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-50"
+            />
+          </div>
+
+          <div className="mt-5 flex flex-wrap gap-2">
+            {filterTabs.map((tab) => (
+              <button
+                key={tab.value}
+                type="button"
+                onClick={() => setActiveFilter(tab.value)}
+                className={`rounded-xl px-4 py-2.5 text-sm font-black transition ${
+                  activeFilter === tab.value
+                    ? 'bg-emerald-700 text-white shadow-sm hover:bg-emerald-800'
+                    : 'bg-slate-100 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
+          {filteredCustomers.length === 0 ? (
+            <EmptyCustomersBlock />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1050px] text-left">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-5 py-4 text-xs font-bold uppercase tracking-wide text-gray-500">
-                      Customer
-                    </th>
-                    <th className="px-5 py-4 text-xs font-bold uppercase tracking-wide text-gray-500">
-                      Location
-                    </th>
-                    <th className="px-5 py-4 text-xs font-bold uppercase tracking-wide text-gray-500">
-                      Occupation
-                    </th>
-                    <th className="px-5 py-4 text-xs font-bold uppercase tracking-wide text-gray-500">
-                      Verification
-                    </th>
-                    <th className="px-5 py-4 text-xs font-bold uppercase tracking-wide text-gray-500">
-                      Agent Link
-                    </th>
-                    <th className="px-5 py-4 text-xs font-bold uppercase tracking-wide text-gray-500">
-                      Fund Space
-                    </th>
-                    <th className="px-5 py-4 text-xs font-bold uppercase tracking-wide text-gray-500">
-                      Registered
-                    </th>
-                    <th className="px-5 py-4 text-right text-xs font-bold uppercase tracking-wide text-gray-500">
-                      Action
-                    </th>
-                  </tr>
-                </thead>
+            <div className="divide-y divide-slate-100">
+              {filteredCustomers.map((customer) => {
+                const joined = isInFundSpace(
+                  customer.customer_id,
+                  fundSpaceCustomerMap
+                );
 
-                <tbody className="divide-y divide-gray-100 bg-white">
-                  {filteredCustomers.map((customer) => {
-                    const customerProfile = customer.profile;
-                    const isInFundSpace =
-                      !!customer.customer_id &&
-                      fundSpaceCustomerIds.has(customer.customer_id);
+                const fundSpaceCustomer = fundSpaceCustomerMap.get(
+                  customer.customer_id
+                );
 
-                    return (
-                      <tr key={customer.relationship_id} className="hover:bg-gray-50">
-                        <td className="px-5 py-5">
-                          <p className="font-bold text-gray-900">
-                            {getCustomerName(customerProfile)}
-                          </p>
-                          <p className="mt-1 text-xs text-gray-500">
-                            {getCustomerPhone(customerProfile)}
-                          </p>
-                        </td>
+                return (
+                  <CustomerRow
+                    key={customer.relationship_id}
+                    customer={customer}
+                    joined={joined}
+                    fundSpaceCustomer={fundSpaceCustomer || null}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </section>
 
-                        <td className="px-5 py-5 text-sm text-gray-700">
-                          {getCustomerLocation(customerProfile)}
-                        </td>
+        <section className="rounded-3xl border border-amber-100 bg-amber-50 p-5">
+          <div className="flex items-start gap-3">
+            <BadgeCheck className="mt-1 h-5 w-5 shrink-0 text-amber-700" />
 
-                        <td className="px-5 py-5">
-                          <p className="text-sm font-semibold text-gray-900">
-                            {getCustomerOccupation(customerProfile)}
-                          </p>
-                          <p className="mt-1 text-xs text-gray-500">
-                            {customerProfile?.business_type || 'No business type'}
-                          </p>
-                        </td>
+            <div className="min-w-0">
+              <h2 className="text-base font-black text-amber-900">
+                Customer management reminder
+              </h2>
 
-                        <td className="px-5 py-5">
-                          <span
-                            className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                              customerProfile?.verification_status
-                            )}`}
-                          >
-                            {prettyStatus(customerProfile?.verification_status)}
-                          </span>
-                        </td>
+              <p className="mt-2 break-words text-sm font-semibold leading-6 text-amber-700">
+                Review customer details carefully before adding them to Fund
+                Space. Verified identity, correct phone number, correct MoMo
+                number, and accurate location help protect the group.
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
 
-                        <td className="px-5 py-5">
-                          <span
-                            className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                              customer.relationship_status
-                            )}`}
-                          >
-                            {prettyStatus(customer.relationship_status)}
-                          </span>
-                        </td>
+function HeroStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="min-w-0 rounded-2xl bg-white/15 px-4 py-3 backdrop-blur">
+      <p className="break-words text-xs font-bold text-emerald-50">{label}</p>
+      <p className="mt-1 text-2xl font-black text-white">{value}</p>
+    </div>
+  );
+}
 
-                        <td className="px-5 py-5">
-                          <span
-                            className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${
-                              isInFundSpace
-                                ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
-                                : 'border-gray-100 bg-gray-50 text-gray-600'
-                            }`}
-                          >
-                            {isInFundSpace ? 'Joined' : 'Not Joined'}
-                          </span>
-                        </td>
+function StatCard({
+  title,
+  value,
+  icon,
+  description,
+}: {
+  title: string;
+  value: number;
+  icon: ReactNode;
+  description: string;
+}) {
+  return (
+    <div className="min-w-0 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-3 inline-flex rounded-2xl bg-emerald-50 p-3 text-emerald-700">
+        {icon}
+      </div>
 
-                        <td className="px-5 py-5 text-sm text-gray-700">
-                          {formatDate(customer.assigned_at)}
-                        </td>
+      <p className="break-words text-sm font-bold text-slate-500">{title}</p>
+      <h3 className="mt-1 text-2xl font-black text-slate-900">{value}</h3>
+      <p className="mt-1 break-words text-xs font-semibold leading-5 text-slate-500">
+        {description}
+      </p>
+    </div>
+  );
+}
 
-                        <td className="px-5 py-5 text-right">
-                          <Link
-                            href={`/agent/customers/${customer.customer_id}`}
-                            className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700"
-                          >
-                            View
-                            <ArrowRight size={15} />
-                          </Link>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+function InfoBox({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="min-w-0 rounded-2xl bg-slate-50 p-4">
+      <p className="break-words text-[11px] font-black uppercase tracking-wide text-slate-400">
+        {label}
+      </p>
+      <div className="mt-1 break-words text-sm font-bold leading-6 text-slate-800">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function TrustTransparencyBox({
+  label,
+  value,
+  icon,
+  tone = 'slate',
+}: {
+  label: string;
+  value: string;
+  icon: ReactNode;
+  tone?: 'emerald' | 'amber' | 'slate';
+}) {
+  const toneClass =
+    tone === 'emerald'
+      ? 'border-emerald-100 bg-emerald-50 text-emerald-800'
+      : tone === 'amber'
+        ? 'border-amber-100 bg-amber-50 text-amber-800'
+        : 'border-slate-200 bg-white text-slate-800';
+
+  return (
+    <div className={`min-w-0 rounded-2xl border p-4 ${toneClass}`}>
+      <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-wide opacity-70">
+        {icon}
+        <span className="break-words">{label}</span>
+      </div>
+      <p className="mt-2 break-words text-sm font-black leading-6">{value}</p>
+    </div>
+  );
+}
+
+function CustomerRow({
+  customer,
+  joined,
+  fundSpaceCustomer,
+}: {
+  customer: AgentCustomer;
+  joined: boolean;
+  fundSpaceCustomer: FundSpaceCustomer | null;
+}) {
+  const profileData = customer.profile;
+  const customerName = getProfileName(profileData);
+  const customerPhone = getProfilePhone(profileData);
+  const customerLocation = getProfileLocation(profileData);
+  const customerWork = getProfileWork(profileData);
+
+  const trustShieldLabel = getTrustShieldLabel(profileData);
+  const transparencyLabel = getTransparencyLabel(joined, fundSpaceCustomer);
+
+  return (
+    <article className="p-5 md:p-6">
+      <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
+        <div className="min-w-0">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-100 text-sm font-black text-emerald-700">
+                {getProfileInitial(profileData)}
+              </div>
+
+              <div className="min-w-0">
+                <h3 className="break-words text-xl font-black text-slate-900">
+                  {customerName}
+                </h3>
+
+                <p className="mt-1 break-words text-sm font-semibold text-slate-500">
+                  {customerPhone} • {customerLocation}
+                </p>
+
+                <p className="mt-1 break-words text-xs font-semibold text-slate-500">
+                  {customerWork} • Registered: {formatDate(customer.created_at)}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <StatusPill status={profileData?.verification_status} />
+              <StatusPill status={profileData?.status} />
+              <StatusPill status={customer.relationship_status} />
+              {joined && <StatusPill status="IN_FUND_SPACE" />}
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <InfoBox
+              label="Phone"
+              value={
+                <span className="inline-flex items-center gap-2">
+                  <Phone className="h-4 w-4 text-slate-400" />
+                  {customerPhone}
+                </span>
+              }
+            />
+
+            <InfoBox
+              label="Email"
+              value={
+                <span className="inline-flex items-center gap-2">
+                  <Mail className="h-4 w-4 text-slate-400" />
+                  {profileData?.email || 'Not provided'}
+                </span>
+              }
+            />
+
+            <InfoBox
+              label="Location"
+              value={
+                <span className="inline-flex items-center gap-2">
+                  <MapPin className="h-4 w-4 text-slate-400" />
+                  {customerLocation}
+                </span>
+              }
+            />
+
+            <InfoBox
+              label="Category"
+              value={
+                <span className="inline-flex items-center gap-2">
+                  <UserRound className="h-4 w-4 text-slate-400" />
+                  {formatLabel(profileData?.user_category)}
+                </span>
+              }
+            />
+          </div>
+
+          {joined && fundSpaceCustomer?.fund_space && (
+            <div className="mt-5 rounded-3xl border border-emerald-100 bg-emerald-50 p-5">
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                <div className="min-w-0">
+                  <p className="text-sm font-black text-emerald-800">
+                    Customer is in Fund Space
+                  </p>
+                  <p className="mt-1 break-words text-sm font-semibold leading-6 text-emerald-700">
+                    {fundSpaceCustomer.fund_space.name} •{' '}
+                    {formatCurrency(
+                      fundSpaceCustomer.fund_space.contribution_amount
+                    )}{' '}
+                    weekly • {formatLabel(fundSpaceCustomer.fund_space.status)} •
+                    Round {fundSpaceCustomer.fund_space.current_round_number || 0}
+                  </p>
+                </div>
+
+                <Link
+                  href={`/agent/fund-space/${customer.customer_id}`}
+                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-black text-white transition hover:bg-emerald-800"
+                >
+                  <Smartphone className="h-4 w-4" />
+                  Collect Payment
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+              </div>
             </div>
           )}
         </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+          <p className="mb-4 text-sm font-black text-slate-900">
+            Customer Actions
+          </p>
+
+          <div className="space-y-3">
+            <Link
+              href={`/agent/customers/${customer.customer_id}`}
+              className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+            >
+              <Eye className="h-4 w-4" />
+              View Customer Profile
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+
+            {joined ? (
+              <Link
+                href={`/agent/fund-space/${customer.customer_id}`}
+                className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-black text-white transition hover:bg-emerald-800"
+              >
+                <Smartphone className="h-4 w-4" />
+                Open Fund Space Payment Page
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+            ) : (
+              <Link
+                href={`/agent/customers/${customer.customer_id}`}
+                className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-amber-600 px-5 text-sm font-black text-white transition hover:bg-amber-700"
+              >
+                <Info className="h-4 w-4" />
+                Check Fund Space Eligibility
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+            )}
+          </div>
+
+          <div className="mt-5 rounded-3xl border border-slate-200 bg-white p-4">
+            <div className="mb-4 flex items-start gap-3">
+              <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-700">
+                <ShieldCheck className="h-5 w-5" />
+              </div>
+
+              <div className="min-w-0">
+                <p className="text-sm font-black text-slate-900">
+                  Trust & Transparency
+                </p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                  Review Trust Shield and Fund Space visibility before collecting
+                  payments.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-3">
+              <TrustTransparencyBox
+                label="Trust Shield"
+                value={trustShieldLabel}
+                icon={<ShieldCheck className="h-4 w-4" />}
+                tone={
+                  normalize(profileData?.verification_status) === 'VERIFIED'
+                    ? 'emerald'
+                    : 'amber'
+                }
+              />
+
+              <TrustTransparencyBox
+                label="Verification"
+                value={formatLabel(profileData?.verification_status)}
+                icon={<BadgeCheck className="h-4 w-4" />}
+                tone={
+                  normalize(profileData?.verification_status) === 'VERIFIED'
+                    ? 'emerald'
+                    : 'amber'
+                }
+              />
+
+              <TrustTransparencyBox
+                label="Transparency"
+                value={transparencyLabel}
+                icon={<WalletCards className="h-4 w-4" />}
+                tone={joined ? 'emerald' : 'amber'}
+              />
+
+              {joined && fundSpaceCustomer?.fund_space && (
+                <>
+                  <TrustTransparencyBox
+                    label="Weekly Amount"
+                    value={formatCurrency(
+                      fundSpaceCustomer.fund_space.contribution_amount
+                    )}
+                    icon={<Smartphone className="h-4 w-4" />}
+                    tone="slate"
+                  />
+
+                  <TrustTransparencyBox
+                    label="Current Round"
+                    value={`Round ${
+                      fundSpaceCustomer.fund_space.current_round_number || 0
+                    }`}
+                    icon={<Clock className="h-4 w-4" />}
+                    tone="slate"
+                  />
+
+                  <TrustTransparencyBox
+                    label="Member Status"
+                    value={formatLabel(fundSpaceCustomer.fund_space_member?.status)}
+                    icon={<CheckCircle2 className="h-4 w-4" />}
+                    tone={
+                      normalize(fundSpaceCustomer.fund_space_member?.status) ===
+                      'ACTIVE'
+                        ? 'emerald'
+                        : 'amber'
+                    }
+                  />
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function EmptyCustomersBlock() {
+  return (
+    <div className="flex min-h-[360px] flex-col items-center justify-center p-8 text-center">
+      <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-50">
+        <Store className="h-9 w-9 text-slate-400" />
       </div>
 
-      <div className="rounded-3xl border border-amber-100 bg-amber-50 p-5 md:p-6">
-        <h2 className="text-lg font-bold text-amber-800">
-          Agent customer management reminder
-        </h2>
+      <h2 className="mt-4 text-lg font-black text-slate-900">
+        No customers found
+      </h2>
 
-        <p className="mt-2 text-sm leading-6 text-amber-700">
-          Always make sure customer records are accurate. Names, phone numbers, locations, and payment
-          details must be correct before customers are allowed to participate in Fund Space groups.
-        </p>
-      </div>
+      <p className="mt-2 max-w-md text-sm font-semibold leading-6 text-slate-500">
+        No customer matches your current search or filter. Register a customer
+        or refresh the page.
+      </p>
+
+      <Link
+        href="/agent/register-customer"
+        className="mt-5 inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-black text-white transition hover:bg-emerald-800"
+      >
+        Register Customer
+        <UserPlus className="h-4 w-4" />
+      </Link>
     </div>
   );
 }

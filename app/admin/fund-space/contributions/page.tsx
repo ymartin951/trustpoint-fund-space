@@ -1,191 +1,238 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import type { ReactNode } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
+  ArrowRight,
   CheckCircle2,
-  CircleDollarSign,
   Clock,
-  CreditCard,
   Eye,
-  FileCheck2,
-  Filter,
-  Info,
+  HandCoins,
   Loader2,
   RefreshCw,
   Search,
   Smartphone,
   UserRound,
-  UsersRound,
   Wallet,
+  X,
   XCircle,
 } from 'lucide-react';
 
 import { supabase } from '@/lib/supabase/client';
-import { useToast } from '@/hooks/use-toast';
 
-type Summary = {
-  total_contributions: number;
-  pending_contributions: number;
-  paid_contributions: number;
-  failed_contributions: number;
-  pending_review_submissions: number;
-  rejected_submissions: number;
-  total_amount_due: number;
-  total_amount_paid: number;
-};
+type ContributionStatusFilter =
+  | 'ALL'
+  | 'PENDING'
+  | 'PAID'
+  | 'OVERDUE'
+  | 'PARTIALLY_PAID'
+  | 'LATE';
 
-type CustomerLite = {
+type VerificationFilter =
+  | 'ALL'
+  | 'PENDING_REVIEW'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'NO_SUBMISSION';
+
+type ProfileLite = {
   id: string;
   full_name: string | null;
   phone: string | null;
-  location: string | null;
-  city: string | null;
-  region: string | null;
-  verification_status: string | null;
-  status: string | null;
-};
-
-type AgentLite = {
-  id: string;
-  full_name: string | null;
-  phone: string | null;
-  role: string | null;
-  status: string | null;
+  location?: string | null;
+  city?: string | null;
+  region?: string | null;
+  role?: string | null;
+  verification_status?: string | null;
+  status?: string | null;
 };
 
 type FundSpaceLite = {
   id: string;
   name: string | null;
-  contribution_amount: number | null;
+  contribution_amount: number | string | null;
   status: string | null;
-  member_limit: number | null;
-  current_round_number: number | null;
+  member_limit?: number | null;
+  current_round_number?: number | null;
 };
 
 type RoundLite = {
   id: string;
   fund_space_id: string;
   round_number: number | null;
-  recipient_user_id: string | null;
-  contribution_amount: number | null;
-  expected_total_amount: number | null;
+  recipient_user_id?: string | null;
+  contribution_amount?: number | string | null;
+  expected_total_amount?: number | string | null;
   contribution_deadline: string | null;
-  week_start_date: string | null;
-  week_end_date: string | null;
+  week_start_date?: string | null;
+  week_end_date?: string | null;
   status: string | null;
 };
 
-type ManualPaymentSubmission = {
+type ManualSubmissionLite = {
   id: string;
   contribution_id: string;
   fund_space_id: string;
+  round_id: string;
   user_id: string;
   agent_id: string | null;
-  status: string | null;
-  transaction_reference: string | null;
-  total_amount_paid: number | null;
+  status: string;
+  transaction_reference: string;
+  total_amount_paid: number | string;
+  amount_due: number | string;
+  service_fee: number | string;
+  payer_type: string;
+  payer_relationship: string | null;
+  sender_name: string | null;
+  sender_phone: string | null;
+  sender_network: string | null;
+  payment_note: string | null;
   rejection_reason: string | null;
-  created_at: string | null;
+  created_at: string;
   reviewed_at: string | null;
+  reviewed_by?: string | null;
+  actual_payment_date?: string | null;
+  actual_payment_time?: string | null;
+  actual_payment_at?: string | null;
+  actual_payment_source?: string | null;
 };
 
-type Contribution = {
+type ContributionRecord = {
   id: string;
   fund_space_id: string;
   round_id: string;
   user_id: string;
-  amount_due: number | null;
-  amount_paid: number | null;
+  amount_due: number | string;
+  amount_paid: number | string;
   confirmed_by: string | null;
   paid_at: string | null;
   payment_method: string | null;
   payment_reference: string | null;
-  status: string | null;
+  status: string;
   created_at: string | null;
   updated_at: string | null;
-  customer: CustomerLite | null;
-  agent: AgentLite | null;
-  fund_space: FundSpaceLite | null;
-  round: RoundLite | null;
-  manual_submission: ManualPaymentSubmission | null;
+  payment_timing?: string | null;
+  is_late?: boolean | null;
+  late_fee_amount?: number | string | null;
+  late_fee_status?: string | null;
+  customer?: ProfileLite | null;
+  agent?: ProfileLite | null;
+  fund_space?: FundSpaceLite | null;
+  round?: RoundLite | null;
+  manual_submission?: ManualSubmissionLite | null;
 };
 
-type ContributionsApiResponse = {
+type ApiSummary = {
+  total_contributions: number;
+  pending_contributions: number;
+  paid_contributions: number;
+  failed_contributions: number;
+  pending_review_submissions: number;
+  approved_submissions: number;
+  rejected_submissions: number;
+  total_amount_due: number;
+  total_amount_paid: number;
+  outstanding_amount: number;
+};
+
+type ApiResponse = {
   success: boolean;
   message?: string;
-  summary?: Summary;
-  contributions?: Contribution[];
+  summary?: ApiSummary;
+  all_summary?: ApiSummary;
+  contributions?: ContributionRecord[];
 };
 
-type ContributionStatusFilter =
-  | 'ALL'
-  | 'PENDING'
-  | 'PAID'
-  | 'FAILED'
-  | 'OVERDUE'
-  | 'PARTIALLY_PAID';
+type SummaryLinkItem = {
+  label: string;
+  value: string | number;
+  helper?: string;
+  href?: string;
+  icon?: ReactNode;
+};
 
-type VerificationFilter =
-  | 'ALL'
-  | 'PENDING_REVIEW'
-  | 'REJECTED'
-  | 'APPROVED';
-
-const defaultSummary: Summary = {
+const emptySummary: ApiSummary = {
   total_contributions: 0,
   pending_contributions: 0,
   paid_contributions: 0,
   failed_contributions: 0,
   pending_review_submissions: 0,
+  approved_submissions: 0,
   rejected_submissions: 0,
   total_amount_due: 0,
   total_amount_paid: 0,
+  outstanding_amount: 0,
 };
 
-function formatCurrency(amount: number | null | undefined) {
-  return `GH₵${Number(amount || 0).toLocaleString('en-GH', {
+const statusTabs: {
+  label: string;
+  value: ContributionStatusFilter;
+}[] = [
+  { label: 'All', value: 'ALL' },
+  { label: 'Due', value: 'PENDING' },
+  { label: 'Paid', value: 'PAID' },
+  { label: 'Overdue', value: 'OVERDUE' },
+  { label: 'Partial', value: 'PARTIALLY_PAID' },
+  { label: 'Late', value: 'LATE' },
+];
+
+const verificationTabs: {
+  label: string;
+  value: VerificationFilter;
+}[] = [
+  { label: 'All Records', value: 'ALL' },
+  { label: 'Awaiting Review', value: 'PENDING_REVIEW' },
+  { label: 'Approved MoMo', value: 'APPROVED' },
+  { label: 'Rejected MoMo', value: 'REJECTED' },
+  { label: 'No MoMo Ref', value: 'NO_SUBMISSION' },
+];
+
+function normalizeStatus(status: string | null | undefined) {
+  return String(status || '').trim().toUpperCase();
+}
+
+function toNumber(value: number | string | null | undefined) {
+  const parsed = Number(value || 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatCurrency(amount: number | string | null | undefined) {
+  return `GH₵${toNumber(amount).toLocaleString('en-GH', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
 }
 
-function formatDate(dateString: string | null | undefined) {
-  if (!dateString) return 'Not set';
+function formatDate(value: string | null | undefined) {
+  if (!value) return 'Not set';
 
-  const date = new Date(dateString);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Invalid date';
 
-  if (Number.isNaN(date.getTime())) {
-    return 'Invalid date';
-  }
-
-  return new Intl.DateTimeFormat('en-GH', {
+  return date.toLocaleDateString('en-GH', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
-  }).format(date);
+  });
 }
 
-function formatDateTime(dateString: string | null | undefined) {
-  if (!dateString) return 'Not set';
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return 'Not set';
 
-  const date = new Date(dateString);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Invalid date';
 
-  if (Number.isNaN(date.getTime())) {
-    return 'Invalid date';
-  }
-
-  return new Intl.DateTimeFormat('en-GH', {
+  return date.toLocaleString('en-GH', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  }).format(date);
+  });
 }
 
 function formatLabel(value: string | null | undefined) {
@@ -197,882 +244,959 @@ function formatLabel(value: string | null | undefined) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function normalizeStatus(value: string | null | undefined) {
-  return String(value || 'PENDING').toUpperCase();
-}
-
-function getStatusStyle(status: string | null | undefined) {
+function statusClass(status: string | null | undefined) {
   const value = normalizeStatus(status);
 
-  if (
-    ['ACTIVE', 'VERIFIED', 'APPROVED', 'COMPLETED', 'PAID', 'SUCCESS'].includes(
-      value
-    )
-  ) {
-    return 'border-emerald-100 bg-emerald-50 text-emerald-700';
+  if (['PAID', 'APPROVED', 'ON_TIME'].includes(value)) {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700';
   }
 
-  if (
-    [
-      'PENDING',
-      'PENDING_REVIEW',
-      'FORMING',
-      'COLLECTING',
-      'READY_FOR_PAYOUT',
-      'PROCESSING',
-      'PARTIALLY_PAID',
-      'OVERDUE',
-    ].includes(value)
-  ) {
-    return 'border-amber-100 bg-amber-50 text-amber-700';
+  if (['PENDING', 'PENDING_REVIEW', 'PARTIALLY_PAID'].includes(value)) {
+    return 'border-amber-200 bg-amber-50 text-amber-700';
   }
 
-  if (
-    [
-      'REJECTED',
-      'FAILED',
-      'INACTIVE',
-      'SUSPENDED',
-      'DEFAULTED',
-      'REFUNDED',
-      'CANCELLED',
-      'ABANDONED',
-      'REVERSED',
-    ].includes(value)
-  ) {
-    return 'border-red-100 bg-red-50 text-red-700';
+  if (['OVERDUE', 'LATE', 'REJECTED', 'FAILED', 'DEFAULTED'].includes(value)) {
+    return 'border-red-200 bg-red-50 text-red-700';
   }
 
-  return 'border-gray-100 bg-gray-50 text-gray-700';
+  if (value === 'NO_SUBMISSION') {
+    return 'border-slate-200 bg-slate-50 text-slate-700';
+  }
+
+  return 'border-slate-200 bg-slate-50 text-slate-700';
 }
 
-function getAmountRemaining(contribution: Contribution) {
-  return Math.max(
-    Number(contribution.amount_due || 0) - Number(contribution.amount_paid || 0),
-    0
+function getContributionActionState(item: ContributionRecord) {
+  const contributionStatus = normalizeStatus(item.status);
+  const manualStatus = normalizeStatus(item.manual_submission?.status);
+
+  if (contributionStatus === 'PAID') {
+    return {
+      label: 'Contribution Paid',
+      description:
+        'This contribution has been confirmed as paid and counted for the round.',
+      className: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+    };
+  }
+
+  if (manualStatus === 'PENDING_REVIEW') {
+    return {
+      label: 'MoMo Review Pending',
+      description:
+        'A manual MoMo reference has been submitted and needs admin review.',
+      className: 'border-amber-200 bg-amber-50 text-amber-800',
+    };
+  }
+
+  if (manualStatus === 'REJECTED') {
+    return {
+      label: 'MoMo Reference Rejected',
+      description:
+        item.manual_submission?.rejection_reason ||
+        'The submitted MoMo reference was rejected.',
+      className: 'border-red-200 bg-red-50 text-red-800',
+    };
+  }
+
+  if (['OVERDUE', 'LATE', 'FAILED', 'DEFAULTED'].includes(contributionStatus)) {
+    return {
+      label: 'Contribution Needs Attention',
+      description:
+        'This contribution is not fully paid and may be late, overdue, failed, or defaulted.',
+      className: 'border-red-200 bg-red-50 text-red-800',
+    };
+  }
+
+  if (contributionStatus === 'PARTIALLY_PAID') {
+    return {
+      label: 'Partially Paid',
+      description: 'The member has paid part of the expected contribution.',
+      className: 'border-amber-200 bg-amber-50 text-amber-800',
+    };
+  }
+
+  return {
+    label: 'Waiting for Payment',
+    description:
+      'No approved payment has been recorded for this contribution yet.',
+    className: 'border-slate-200 bg-white text-slate-700',
+  };
+}
+
+async function readApiResponse(response: Response): Promise<ApiResponse> {
+  const text = await response.text();
+
+  if (!text) {
+    return {
+      success: false,
+      message: 'The server returned an empty response.',
+    };
+  }
+
+  try {
+    return JSON.parse(text) as ApiResponse;
+  } catch {
+    return {
+      success: false,
+      message: 'The server returned an invalid response.',
+    };
+  }
+}
+
+function SummaryLine({ item }: { item: SummaryLinkItem }) {
+  const content = (
+    <div className="group min-w-0 rounded-2xl border border-white/70 bg-white/10 p-4 text-white transition hover:-translate-y-0.5 hover:bg-white/20 hover:shadow-lg">
+      <div className="flex items-center justify-between gap-2">
+        <p className="truncate text-[11px] font-black uppercase tracking-wide text-emerald-50/90">
+          {item.label}
+        </p>
+
+        <span className="text-emerald-50/90 transition group-hover:translate-x-0.5">
+          {item.icon || <ArrowRight className="h-4 w-4" />}
+        </span>
+      </div>
+
+      <p className="mt-2 truncate text-2xl font-black text-white md:text-3xl">
+        {item.value}
+      </p>
+
+      {item.helper && (
+        <p className="mt-1 truncate text-xs font-semibold text-emerald-50/80">
+          {item.helper}
+        </p>
+      )}
+    </div>
+  );
+
+  if (!item.href) return content;
+
+  return <Link href={item.href}>{content}</Link>;
+}
+
+function StatusPill({ status }: { status: string | null | undefined }) {
+  return (
+    <span
+      className={`inline-flex max-w-full rounded-full border px-3 py-1 text-xs font-black ${statusClass(
+        status
+      )}`}
+    >
+      <span className="truncate">{formatLabel(status)}</span>
+    </span>
   );
 }
 
-function getContributionDestination(contribution: Contribution) {
-  const submission = contribution.manual_submission;
-
-  if (normalizeStatus(submission?.status) === 'PENDING_REVIEW') {
-    return `/admin/manual-payment-submissions?contribution_id=${encodeURIComponent(
-      contribution.id
-    )}`;
-  }
-
-  if (submission?.id) {
-    return `/admin/manual-payment-submissions?contribution_id=${encodeURIComponent(
-      contribution.id
-    )}`;
-  }
-
-  if (contribution.fund_space_id) {
-    return `/admin/fund-space?fund_space_id=${encodeURIComponent(
-      contribution.fund_space_id
-    )}`;
-  }
-
-  return '/admin/fund-space';
-}
-
-function buildQuery(params: {
-  status?: ContributionStatusFilter;
-  verification?: VerificationFilter;
-  search?: string;
-}) {
-  const next = new URLSearchParams();
-
-  if (params.status && params.status !== 'ALL') {
-    next.set('status', params.status);
-  }
-
-  if (params.verification && params.verification !== 'ALL') {
-    next.set('verification', params.verification);
-  }
-
-  if (params.search?.trim()) {
-    next.set('search', params.search.trim());
-  }
-
-  const query = next.toString();
-
-  return query ? `/admin/fund-space/contributions?${query}` : '/admin/fund-space/contributions';
-}
-
-function StatCard({
-  title,
+function CompactInfo({
+  label,
   value,
-  description,
-  icon,
-  href,
 }: {
-  title: string;
-  value: string | number;
-  description: string;
-  icon: ReactNode;
-  href: string;
+  label: string;
+  value: string | number | null | undefined;
 }) {
   return (
-    <Link
-      href={href}
-      className="group block rounded-2xl border border-gray-100 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-md"
-    >
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-semibold text-gray-500">{title}</p>
-          <h3 className="mt-2 text-3xl font-bold text-gray-900">{value}</h3>
-          <p className="mt-1 text-sm leading-6 text-gray-500">{description}</p>
-          <p className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-emerald-700 opacity-0 transition group-hover:opacity-100">
-            Open records <Eye className="h-3.5 w-3.5" />
-          </p>
-        </div>
-
-        <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-700 transition group-hover:bg-emerald-600 group-hover:text-white">
-          {icon}
-        </div>
-      </div>
-    </Link>
+    <div className="min-w-0 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+      <p className="truncate text-[11px] font-black uppercase tracking-wide text-slate-400">
+        {label}
+      </p>
+      <p className="mt-1 break-words text-sm font-black text-slate-900">
+        {value ?? 'Not set'}
+      </p>
+    </div>
   );
 }
 
-function InfoCard({
-  title,
-  description,
-  icon,
-  href,
-  tone,
+function MessageBox({
+  type,
+  message,
 }: {
-  title: string;
-  description: string;
-  icon: ReactNode;
-  href: string;
-  tone: 'emerald' | 'amber' | 'gray';
+  type: 'success' | 'error';
+  message: string;
 }) {
-  const styles = {
-    emerald:
-      'border-emerald-100 bg-emerald-50 text-emerald-700 hover:border-emerald-200 hover:bg-emerald-100',
-    amber:
-      'border-amber-100 bg-amber-50 text-amber-700 hover:border-amber-200 hover:bg-amber-100',
-    gray:
-      'border-gray-100 bg-gray-50 text-gray-700 hover:border-gray-200 hover:bg-gray-100',
-  };
-
-  const titleStyles = {
-    emerald: 'text-emerald-900',
-    amber: 'text-amber-900',
-    gray: 'text-gray-900',
-  };
+  const isSuccess = type === 'success';
 
   return (
-    <Link
-      href={href}
-      className={`group block rounded-3xl border p-5 transition hover:-translate-y-0.5 hover:shadow-sm ${styles[tone]}`}
+    <div
+      className={`rounded-3xl border p-5 ${
+        isSuccess
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          : 'border-red-200 bg-red-50 text-red-700'
+      }`}
     >
-      <div className="flex gap-3">
-        <div className="mt-1 shrink-0">{icon}</div>
-        <div>
-          <h2 className={`font-black ${titleStyles[tone]}`}>{title}</h2>
-          <p className="mt-1 text-sm leading-6">{description}</p>
-          <p className="mt-3 inline-flex items-center gap-1 text-xs font-black">
-            View related information <Eye className="h-3.5 w-3.5" />
-          </p>
-        </div>
+      <div className="flex items-start gap-3">
+        {isSuccess ? (
+          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
+        ) : (
+          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+        )}
+        <p className="min-w-0 break-words text-sm font-bold leading-6">
+          {message}
+        </p>
       </div>
-    </Link>
+    </div>
   );
 }
 
 export default function AdminFundSpaceContributionsPage() {
-  const router = useRouter();
   const searchParams = useSearchParams();
-  const { toast } = useToast();
 
-  const [contributions, setContributions] = useState<Contribution[]>([]);
-  const [summary, setSummary] = useState<Summary>(defaultSummary);
-  const [loading, setLoading] = useState(true);
+  const initialFundSpaceId = searchParams.get('fund_space_id') || '';
+  const initialRoundId = searchParams.get('round_id') || '';
 
-  const [statusFilter, setStatusFilter] = useState<ContributionStatusFilter>(
-    'ALL'
-  );
+  const [contributions, setContributions] = useState<ContributionRecord[]>([]);
+  const [summary, setSummary] = useState<ApiSummary>(emptySummary);
+
+  const [statusFilter, setStatusFilter] =
+    useState<ContributionStatusFilter>('ALL');
   const [verificationFilter, setVerificationFilter] =
     useState<VerificationFilter>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
 
-  const [message, setMessage] = useState<{
-    type: 'success' | 'error' | 'info';
-    text: string;
-  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [selectedContribution, setSelectedContribution] =
+    useState<ContributionRecord | null>(null);
 
-  const getAccessToken = async () => {
-    const {
-      data: { session },
-      error,
-    } = await supabase.auth.getSession();
-
-    if (error || !session?.access_token) {
-      throw new Error('Your session has expired. Please login again.');
-    }
-
-    return session.access_token;
-  };
-
-  const syncFiltersFromUrl = useCallback(() => {
-    const urlStatus = normalizeStatus(searchParams.get('status'));
-    const urlVerification = normalizeStatus(searchParams.get('verification'));
-    const urlSearch = searchParams.get('search') || '';
-
-    const validStatuses: ContributionStatusFilter[] = [
-      'ALL',
-      'PENDING',
-      'PAID',
-      'FAILED',
-      'OVERDUE',
-      'PARTIALLY_PAID',
-    ];
-
-    const validVerificationStatuses: VerificationFilter[] = [
-      'ALL',
-      'PENDING_REVIEW',
-      'REJECTED',
-      'APPROVED',
-    ];
-
-    setStatusFilter(
-      validStatuses.includes(urlStatus as ContributionStatusFilter)
-        ? (urlStatus as ContributionStatusFilter)
-        : 'ALL'
-    );
-
-    setVerificationFilter(
-      validVerificationStatuses.includes(
-        urlVerification as VerificationFilter
-      )
-        ? (urlVerification as VerificationFilter)
-        : 'ALL'
-    );
-
-    setSearchTerm(urlSearch);
-  }, [searchParams]);
-
-  const loadContributions = useCallback(async () => {
-    try {
-      setLoading(true);
-      setMessage(null);
-
-      const token = await getAccessToken();
-
-      const params = new URLSearchParams();
-
-      const urlStatus = searchParams.get('status');
-      const urlVerification = searchParams.get('verification');
-      const urlSearch = searchParams.get('search');
-
-      if (urlStatus) {
-        params.set('status', urlStatus);
-      }
-
-      if (urlVerification) {
-        params.set('verification', urlVerification);
-      }
-
-      if (urlSearch) {
-        params.set('search', urlSearch);
-      }
-
-      const response = await fetch(
-        `/api/admin/fund-space/contributions?${params.toString()}`,
-        {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+  const loadContributions = useCallback(
+    async (showRefreshState = false) => {
+      try {
+        if (showRefreshState) {
+          setRefreshing(true);
+        } else {
+          setLoading(true);
         }
-      );
 
-      const result = (await response.json()) as ContributionsApiResponse;
+        setErrorMessage('');
 
-      if (!response.ok || !result.success) {
-        throw new Error(result.message || 'Could not load contribution records.');
+        const {
+          data: { session },
+          error: sessionError,
+        } = await supabase.auth.getSession();
+
+        if (sessionError || !session?.access_token) {
+          throw new Error('Your session has expired. Please log in again.');
+        }
+
+        const params = new URLSearchParams();
+
+        params.set('limit', '2000');
+
+        if (statusFilter !== 'ALL') {
+          params.set('status', statusFilter);
+        }
+
+        if (verificationFilter !== 'ALL') {
+          params.set('verification', verificationFilter);
+        }
+
+        if (searchTerm.trim()) {
+          params.set('search', searchTerm.trim());
+        }
+
+        if (initialFundSpaceId) {
+          params.set('fund_space_id', initialFundSpaceId);
+        }
+
+        if (initialRoundId) {
+          params.set('round_id', initialRoundId);
+        }
+
+        const response = await fetch(
+          `/api/admin/fund-space/contributions?${params.toString()}`,
+          {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${session.access_token}`,
+            },
+          }
+        );
+
+        const result = await readApiResponse(response);
+
+        if (!response.ok || !result.success) {
+          throw new Error(result.message || 'Unable to load contribution records.');
+        }
+
+        setContributions(result.contributions || []);
+        setSummary(result.summary || emptySummary);
+      } catch (error) {
+        setErrorMessage(
+          error instanceof Error
+            ? error.message
+            : 'Unable to load contribution records.'
+        );
+        setContributions([]);
+        setSummary(emptySummary);
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
       }
-
-      setContributions(result.contributions || []);
-      setSummary(result.summary || defaultSummary);
-    } catch (error) {
-      const text =
-        error instanceof Error
-          ? error.message
-          : 'Something went wrong while loading admin contribution records.';
-
-      setMessage({
-        type: 'error',
-        text,
-      });
-
-      toast({
-        title: 'Could not load contributions',
-        description: text,
-        variant: 'destructive',
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [searchParams, toast]);
+    },
+    [
+      initialFundSpaceId,
+      initialRoundId,
+      searchTerm,
+      statusFilter,
+      verificationFilter,
+    ]
+  );
 
   useEffect(() => {
-    syncFiltersFromUrl();
-    loadContributions();
-  }, [syncFiltersFromUrl, loadContributions]);
+    const timer = window.setTimeout(() => {
+      loadContributions();
+    }, 250);
 
-  const visibleContributions = useMemo(() => {
-    const normalizedSearch = searchTerm.trim().toLowerCase();
+    return () => window.clearTimeout(timer);
+  }, [loadContributions]);
 
-    if (!normalizedSearch) return contributions;
+  const pageTitle = useMemo(() => {
+    if (initialRoundId) return 'Round Contribution Records';
+    if (initialFundSpaceId) return 'Fund Space Contribution Records';
 
-    return contributions.filter((contribution) => {
-      const customer = contribution.customer;
-      const agent = contribution.agent;
-      const fundSpace = contribution.fund_space;
-      const round = contribution.round;
-      const manualSubmission = contribution.manual_submission;
+    return 'All Fund Space Contributions';
+  }, [initialFundSpaceId, initialRoundId]);
 
-      return [
-        customer?.full_name,
-        customer?.phone,
-        customer?.location,
-        customer?.city,
-        customer?.region,
-        agent?.full_name,
-        agent?.phone,
-        fundSpace?.name,
-        round?.round_number ? String(round.round_number) : '',
-        contribution.payment_reference,
-        contribution.status,
-        manualSubmission?.transaction_reference,
-        manualSubmission?.status,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase()
-        .includes(normalizedSearch);
-    });
-  }, [contributions, searchTerm]);
+  const baseContributionHref = useMemo(() => {
+    const params = new URLSearchParams();
 
-  function applyFilters(next: {
-    status?: ContributionStatusFilter;
-    verification?: VerificationFilter;
-    search?: string;
-  }) {
-    const href = buildQuery({
-      status: next.status ?? statusFilter,
-      verification: next.verification ?? verificationFilter,
-      search: next.search ?? searchTerm,
-    });
+    if (initialFundSpaceId) params.set('fund_space_id', initialFundSpaceId);
+    if (initialRoundId) params.set('round_id', initialRoundId);
 
-    router.push(href);
-  }
+    const query = params.toString();
 
-  function submitSearch() {
-    applyFilters({
-      search: searchTerm,
-    });
+    return query
+      ? `/admin/fund-space/contributions?${query}`
+      : '/admin/fund-space/contributions';
+  }, [initialFundSpaceId, initialRoundId]);
+
+  const summaryItems: SummaryLinkItem[] = [
+    {
+      label: 'Total Records',
+      value: summary.total_contributions,
+      helper: 'All contributions',
+      href: baseContributionHref,
+      icon: <Wallet className="h-4 w-4" />,
+    },
+    {
+      label: 'Contribution Due',
+      value: summary.pending_contributions,
+      helper: 'Pending/overdue',
+      href: `${baseContributionHref}${
+        baseContributionHref.includes('?') ? '&' : '?'
+      }status=PENDING`,
+      icon: <Clock className="h-4 w-4" />,
+    },
+    {
+      label: 'Paid Members',
+      value: summary.paid_contributions,
+      helper: 'Confirmed paid',
+      href: `${baseContributionHref}${
+        baseContributionHref.includes('?') ? '&' : '?'
+      }status=PAID`,
+      icon: <CheckCircle2 className="h-4 w-4" />,
+    },
+    {
+      label: 'Awaiting Review',
+      value: summary.pending_review_submissions,
+      helper: 'MoMo references',
+      href: `${baseContributionHref}${
+        baseContributionHref.includes('?') ? '&' : '?'
+      }verification=PENDING_REVIEW`,
+      icon: <Smartphone className="h-4 w-4" />,
+    },
+    {
+      label: 'Rejected MoMo',
+      value: summary.rejected_submissions,
+      helper: 'Rejected refs',
+      href: `${baseContributionHref}${
+        baseContributionHref.includes('?') ? '&' : '?'
+      }verification=REJECTED`,
+      icon: <XCircle className="h-4 w-4" />,
+    },
+    {
+      label: 'Amount Paid',
+      value: formatCurrency(summary.total_amount_paid),
+      helper: 'Confirmed',
+      href: `${baseContributionHref}${
+        baseContributionHref.includes('?') ? '&' : '?'
+      }status=PAID`,
+      icon: <HandCoins className="h-4 w-4" />,
+    },
+  ];
+
+  useEffect(() => {
+    const urlStatus = normalizeStatus(searchParams.get('status'));
+    const urlVerification = normalizeStatus(searchParams.get('verification'));
+
+    if (
+      ['ALL', 'PENDING', 'PAID', 'OVERDUE', 'PARTIALLY_PAID', 'LATE'].includes(
+        urlStatus
+      )
+    ) {
+      setStatusFilter(urlStatus as ContributionStatusFilter);
+    }
+
+    if (
+      [
+        'ALL',
+        'PENDING_REVIEW',
+        'APPROVED',
+        'REJECTED',
+        'NO_SUBMISSION',
+      ].includes(urlVerification)
+    ) {
+      setVerificationFilter(urlVerification as VerificationFilter);
+    }
+  }, [searchParams]);
+
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-slate-50 px-4 py-6">
+        <div className="mx-auto flex min-h-[60vh] max-w-7xl items-center justify-center">
+          <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+            <Loader2 className="mx-auto h-10 w-10 animate-spin text-emerald-700" />
+            <p className="mt-4 text-sm font-black text-slate-600">
+              Loading contribution records...
+            </p>
+          </div>
+        </div>
+      </main>
+    );
   }
 
   return (
-    <div className="space-y-8">
-      <Link
-        href="/admin/fund-space"
-        className="inline-flex items-center gap-2 text-sm font-bold text-emerald-700 hover:text-emerald-800"
-      >
-        <ArrowLeft size={16} />
-        Back to Fund Space Management
-      </Link>
-
-      <div className="rounded-3xl bg-gradient-to-r from-emerald-700 via-emerald-600 to-teal-600 p-6 text-white shadow-sm md:p-8">
-        <div className="flex flex-col justify-between gap-6 lg:flex-row lg:items-center">
-          <div className="max-w-3xl">
-            <p className="mb-3 inline-flex rounded-full bg-white/15 px-4 py-1 text-sm font-medium">
-              Admin Weekly Contributions
-            </p>
-
-            <h1 className="text-3xl font-bold md:text-4xl">
-              Monitor all Fund Space contribution records
-            </h1>
-
-            <p className="mt-4 max-w-2xl text-sm leading-7 text-emerald-50 md:text-base">
-              View customer weekly contribution records across all Fund Spaces,
-              agents, payment statuses, and MoMo verification states. Approval
-              and rejection still happen on the MoMo Verification page.
-            </p>
-          </div>
+    <main className="min-h-screen bg-slate-50 px-4 py-5 md:px-8">
+      <div className="mx-auto max-w-7xl space-y-5">
+        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+          <Link
+            href="/admin/fund-space"
+            className="inline-flex min-h-11 w-fit items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-100"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to Fund Spaces
+          </Link>
 
           <button
             type="button"
-            onClick={loadContributions}
-            disabled={loading}
-            className="inline-flex min-h-12 w-fit items-center justify-center gap-2 rounded-xl bg-white/15 px-5 py-3 text-sm font-bold text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+            onClick={() => loadContributions(true)}
+            disabled={refreshing}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {loading ? (
-              <Loader2 size={16} className="animate-spin" />
-            ) : (
-              <RefreshCw size={16} />
-            )}
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
             Refresh
           </button>
         </div>
-      </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <InfoCard
-          title="Pay with MoMo Records"
-          description="Open contribution records that are connected to manual MoMo payment submission and verification."
-          icon={<Smartphone className="h-6 w-6" />}
-          href={buildQuery({ verification: 'PENDING_REVIEW' })}
-          tone="emerald"
-        />
+        <section className="overflow-hidden rounded-[2rem] bg-gradient-to-br from-emerald-950 via-emerald-900 to-emerald-800 text-white shadow-sm">
+          <div className="p-5 md:p-8">
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0">
+                <p className="inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-2 text-xs font-black">
+                  <HandCoins className="h-4 w-4" />
+                  Admin Fund Space Contributions
+                </p>
 
-        <InfoCard
-          title="Online Payment Coming Soon"
-          description="Online checkout is still disabled. Admin can monitor records here while TrustPoint uses verified MoMo payments."
-          icon={<CreditCard className="h-6 w-6" />}
-          href={buildQuery({ status: 'ALL' })}
-          tone="amber"
-        />
+                <h1 className="mt-5 text-3xl font-black tracking-tight md:text-5xl">
+                  {pageTitle}
+                </h1>
 
-        <InfoCard
-          title="Admin MoMo Verification"
-          description="Go to the approval and rejection page for pending MoMo payment references."
-          icon={<FileCheck2 className="h-6 w-6" />}
-          href="/admin/manual-payment-submissions"
-          tone="gray"
-        />
-      </div>
+                <p className="mt-4 max-w-3xl text-sm font-semibold leading-7 text-emerald-50 md:text-base">
+                  Track contribution payments, MoMo review status, paid members,
+                  pending members, rejected references, and total amount collected.
+                </p>
+              </div>
 
-      {message && (
-        <div
-          className={`flex items-start gap-3 rounded-2xl border p-4 text-sm font-semibold ${
-            message.type === 'success'
-              ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
-              : message.type === 'info'
-                ? 'border-blue-100 bg-blue-50 text-blue-700'
-                : 'border-red-100 bg-red-50 text-red-700'
-          }`}
-        >
-          {message.type === 'success' ? (
-            <CheckCircle2 className="mt-0.5 h-5 w-5 flex-none" />
-          ) : message.type === 'info' ? (
-            <Info className="mt-0.5 h-5 w-5 flex-none" />
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  href="/admin/fund-space"
+                  className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-white/25 bg-white/10 px-4 text-xs font-black text-white ring-1 ring-white/10 transition hover:bg-white/20"
+                >
+                  Fund Space
+                </Link>
+
+                <Link
+                  href="/admin/manual-payment-submissions"
+                  className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-white/25 bg-white/10 px-4 text-xs font-black text-white ring-1 ring-white/10 transition hover:bg-white/20"
+                >
+                  MoMo Reviews
+                </Link>
+
+                <Link
+                  href="/admin/fund-space/payouts"
+                  className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-white/25 bg-white/10 px-4 text-xs font-black text-white ring-1 ring-white/10 transition hover:bg-white/20"
+                >
+                  Payouts
+                </Link>
+              </div>
+            </div>
+
+            <div className="mt-7 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+              {summaryItems.map((item) => (
+                <SummaryLine key={item.label} item={item} />
+              ))}
+            </div>
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <SummaryLine
+                item={{
+                  label: 'Expected Amount',
+                  value: formatCurrency(summary.total_amount_due),
+                  helper: 'Total due',
+                  icon: <Wallet className="h-4 w-4" />,
+                }}
+              />
+
+              <SummaryLine
+                item={{
+                  label: 'Outstanding',
+                  value: formatCurrency(summary.outstanding_amount),
+                  helper: 'Still unpaid',
+                  icon: <Clock className="h-4 w-4" />,
+                }}
+              />
+
+              <SummaryLine
+                item={{
+                  label: 'Approved MoMo',
+                  value: summary.approved_submissions,
+                  helper: 'Approved refs',
+                  icon: <CheckCircle2 className="h-4 w-4" />,
+                }}
+              />
+            </div>
+          </div>
+        </section>
+
+        {errorMessage && <MessageBox type="error" message={errorMessage} />}
+
+        <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
+            <div className="relative min-w-0">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
+              <input
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                placeholder="Search member, phone, reference, group, round..."
+                className="min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-sm font-semibold outline-none focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
+              />
+            </div>
+
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {statusTabs.map((tab) => (
+                <button
+                  key={tab.value}
+                  type="button"
+                  onClick={() => setStatusFilter(tab.value)}
+                  className={`shrink-0 rounded-2xl px-4 py-3 text-xs font-black transition ${
+                    statusFilter === tab.value
+                      ? 'bg-emerald-700 text-white'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+            {verificationTabs.map((tab) => (
+              <button
+                key={tab.value}
+                type="button"
+                onClick={() => setVerificationFilter(tab.value)}
+                className={`shrink-0 rounded-2xl px-4 py-3 text-xs font-black transition ${
+                  verificationFilter === tab.value
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          <p className="mt-3 rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-600">
+            Showing {contributions.length} contribution records.
+          </p>
+        </section>
+
+        <section className="space-y-4">
+          {contributions.length === 0 ? (
+            <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+              <HandCoins className="mx-auto h-10 w-10 text-slate-300" />
+
+              <h2 className="mt-4 text-lg font-black text-slate-900">
+                No contribution records found
+              </h2>
+
+              <p className="mt-2 text-sm text-slate-500">
+                Try another tab, search term, or refresh the page.
+              </p>
+            </div>
           ) : (
-            <AlertCircle className="mt-0.5 h-5 w-5 flex-none" />
-          )}
-          <p>{message.text}</p>
-        </div>
-      )}
-
-      <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-6">
-        <StatCard
-          title="Total Records"
-          value={summary.total_contributions}
-          description="All contribution records"
-          icon={<Wallet className="h-5 w-5" />}
-          href={buildQuery({ status: 'ALL', verification: 'ALL' })}
-        />
-
-        <StatCard
-          title="Contribution Due"
-          value={summary.pending_contributions}
-          description="Pending, overdue, or partially paid"
-          icon={<Clock className="h-5 w-5" />}
-          href={buildQuery({ status: 'PENDING', verification: 'ALL' })}
-        />
-
-        <StatCard
-          title="Paid"
-          value={summary.paid_contributions}
-          description="Confirmed paid contributions"
-          icon={<CheckCircle2 className="h-5 w-5" />}
-          href={buildQuery({ status: 'PAID', verification: 'ALL' })}
-        />
-
-        <StatCard
-          title="Awaiting Review"
-          value={summary.pending_review_submissions}
-          description="MoMo references waiting for admin"
-          icon={<FileCheck2 className="h-5 w-5" />}
-          href={buildQuery({ status: 'ALL', verification: 'PENDING_REVIEW' })}
-        />
-
-        <StatCard
-          title="Rejected MoMo"
-          value={summary.rejected_submissions}
-          description="Rejected payment references"
-          icon={<XCircle className="h-5 w-5" />}
-          href={buildQuery({ status: 'ALL', verification: 'REJECTED' })}
-        />
-
-        <StatCard
-          title="Amount Paid"
-          value={formatCurrency(summary.total_amount_paid)}
-          description="Confirmed weekly collection"
-          icon={<CircleDollarSign className="h-5 w-5" />}
-          href={buildQuery({ status: 'PAID', verification: 'ALL' })}
-        />
-      </section>
-
-      <section className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div className="relative w-full xl:max-w-md">
-            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-            <input
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  submitSearch();
-                }
-              }}
-              placeholder="Search customer, agent, phone, group, round, reference..."
-              className="w-full rounded-2xl border border-gray-200 bg-gray-50 py-3 pl-11 pr-4 text-sm outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-50"
-            />
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            {(['ALL', 'PENDING', 'PAID', 'FAILED'] as const).map((item) => (
-              <button
-                key={item}
-                type="button"
-                onClick={() => applyFilters({ status: item })}
-                className={`rounded-xl px-4 py-2.5 text-sm font-bold transition ${
-                  statusFilter === item
-                    ? 'bg-emerald-600 text-white shadow-sm hover:bg-emerald-700'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                {item === 'ALL'
-                  ? 'All'
-                  : item === 'PENDING'
-                    ? 'Contribution Due'
-                    : item === 'PAID'
-                      ? 'Paid'
-                      : 'Failed'}
-              </button>
-            ))}
-
-            {(['ALL', 'PENDING_REVIEW', 'REJECTED'] as const).map((item) => (
-              <button
-                key={item}
-                type="button"
-                onClick={() => applyFilters({ verification: item })}
-                className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition ${
-                  verificationFilter === item
-                    ? 'bg-gray-900 text-white shadow-sm hover:bg-gray-800'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                <Filter className="h-4 w-4" />
-                {item === 'ALL'
-                  ? 'All Verification'
-                  : item === 'PENDING_REVIEW'
-                    ? 'Awaiting Review'
-                    : 'Rejected'}
-              </button>
-            ))}
-
-            <button
-              type="button"
-              onClick={submitSearch}
-              className="rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-bold text-gray-700 transition hover:bg-gray-50"
-            >
-              Search
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-3xl border border-gray-100 bg-white shadow-sm">
-        {loading ? (
-          <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 p-8 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50">
-              <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
-            </div>
-            <p className="text-sm font-medium text-gray-500">
-              Loading admin contribution records...
-            </p>
-          </div>
-        ) : visibleContributions.length === 0 ? (
-          <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 p-8 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-gray-50">
-              <Wallet className="h-8 w-8 text-gray-400" />
-            </div>
-            <h2 className="text-lg font-bold text-gray-900">
-              No contribution records found
-            </h2>
-            <p className="max-w-md text-sm leading-6 text-gray-500">
-              Try clearing the filters or search term. Weekly contribution
-              records will appear here when Fund Space rounds are generated.
-            </p>
-          </div>
-        ) : (
-          <div className="divide-y divide-gray-100">
-            {visibleContributions.map((contribution) => {
-              const customer = contribution.customer;
-              const agent = contribution.agent;
-              const fundSpace = contribution.fund_space;
-              const round = contribution.round;
-              const manualSubmission = contribution.manual_submission;
-              const remaining = getAmountRemaining(contribution);
-              const destination = getContributionDestination(contribution);
-              const verificationStatus = normalizeStatus(manualSubmission?.status);
+            contributions.map((item) => {
+              const manualStatus =
+                item.manual_submission?.status || 'NO_SUBMISSION';
+              const isPaid = normalizeStatus(item.status) === 'PAID';
+              const actionState = getContributionActionState(item);
 
               return (
-                <div
-                  key={contribution.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => router.push(destination)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      router.push(destination);
-                    }
-                  }}
-                  className="group cursor-pointer p-5 transition hover:bg-emerald-50/40 md:p-6"
+                <article
+                  key={item.id}
+                  className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm transition hover:border-emerald-200 hover:shadow-md"
                 >
-                  <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-xl font-bold text-gray-900 group-hover:text-emerald-800">
-                          {customer?.full_name || 'Unknown customer'}
-                        </h3>
-
-                        <span
-                          className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                            contribution.status
-                          )}`}
-                        >
-                          {formatLabel(contribution.status)}
-                        </span>
-
-                        {manualSubmission && (
-                          <span
-                            className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                              manualSubmission.status
-                            )}`}
-                          >
-                            MoMo: {formatLabel(manualSubmission.status)}
-                          </span>
-                        )}
-
-                        {round && (
-                          <span className="rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
-                            Round {round.round_number || 'N/A'}
-                          </span>
+                  <div className="grid gap-5 p-5 xl:grid-cols-[1fr_280px] xl:items-start">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap gap-2">
+                        <StatusPill status={item.status} />
+                        <StatusPill status={manualStatus} />
+                        {item.payment_timing && (
+                          <StatusPill status={item.payment_timing} />
                         )}
                       </div>
 
-                      <div className="mt-4 grid gap-3 text-sm text-gray-600 sm:grid-cols-2 lg:grid-cols-4">
-                        <div className="rounded-2xl bg-gray-50 p-4 transition group-hover:bg-white">
-                          <p className="text-xs font-semibold uppercase text-gray-400">
-                            Customer Phone
-                          </p>
-                          <p className="mt-1 font-bold text-gray-800">
-                            {customer?.phone || 'Not provided'}
-                          </p>
-                        </div>
-
-                        <div className="rounded-2xl bg-gray-50 p-4 transition group-hover:bg-white">
-                          <p className="text-xs font-semibold uppercase text-gray-400">
-                            Amount Due
-                          </p>
-                          <p className="mt-1 font-bold text-gray-800">
-                            {formatCurrency(contribution.amount_due)}
-                          </p>
-                        </div>
-
-                        <div className="rounded-2xl bg-gray-50 p-4 transition group-hover:bg-white">
-                          <p className="text-xs font-semibold uppercase text-gray-400">
-                            Amount Paid
-                          </p>
-                          <p className="mt-1 font-bold text-gray-800">
-                            {formatCurrency(contribution.amount_paid)}
-                          </p>
-                        </div>
-
-                        <div className="rounded-2xl bg-gray-50 p-4 transition group-hover:bg-white">
-                          <p className="text-xs font-semibold uppercase text-gray-400">
-                            Remaining
-                          </p>
-                          <p className="mt-1 font-bold text-gray-800">
-                            {formatCurrency(remaining)}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="mt-4 grid gap-3 text-sm text-gray-600 lg:grid-cols-3">
-                        <div className="rounded-2xl bg-gray-50 p-4 transition group-hover:bg-white">
-                          <p>
-                            <span className="font-bold text-gray-800">
-                              Fund Space:
-                            </span>{' '}
-                            {fundSpace?.name || 'Not available'}
-                          </p>
-                          <p className="mt-1">
-                            <span className="font-bold text-gray-800">
-                              Fund Space Status:
-                            </span>{' '}
-                            {formatLabel(fundSpace?.status)}
-                          </p>
-                        </div>
-
-                        <div className="rounded-2xl bg-gray-50 p-4 transition group-hover:bg-white">
-                          <p>
-                            <span className="font-bold text-gray-800">
-                              Agent:
-                            </span>{' '}
-                            {agent?.full_name || 'Not assigned'}
-                          </p>
-                          <p className="mt-1">
-                            <span className="font-bold text-gray-800">
-                              Agent Phone:
-                            </span>{' '}
-                            {agent?.phone || 'Not available'}
-                          </p>
-                        </div>
-
-                        <div className="rounded-2xl bg-gray-50 p-4 transition group-hover:bg-white">
-                          <p>
-                            <span className="font-bold text-gray-800">
-                              Deadline:
-                            </span>{' '}
-                            {formatDate(round?.contribution_deadline)}
-                          </p>
-                          <p className="mt-1">
-                            <span className="font-bold text-gray-800">
-                              Paid At:
-                            </span>{' '}
-                            {formatDateTime(contribution.paid_at)}
-                          </p>
-                        </div>
-                      </div>
-
-                      {manualSubmission && (
-                        <div
-                          className={`mt-4 flex items-start gap-3 rounded-2xl border p-4 text-sm ${
-                            verificationStatus === 'PENDING_REVIEW'
-                              ? 'border-amber-100 bg-amber-50 text-amber-700'
-                              : verificationStatus === 'REJECTED'
-                                ? 'border-red-100 bg-red-50 text-red-700'
-                                : 'border-emerald-100 bg-emerald-50 text-emerald-700'
-                          }`}
-                        >
-                          {verificationStatus === 'REJECTED' ? (
-                            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
-                          ) : verificationStatus === 'PENDING_REVIEW' ? (
-                            <Clock className="mt-0.5 h-5 w-5 shrink-0" />
-                          ) : (
-                            <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
-                          )}
-
-                          <div>
-                            <p className="font-black">
-                              MoMo verification information
-                            </p>
-                            <p className="mt-1 leading-6">
-                              Reference:{' '}
-                              <span className="font-bold">
-                                {manualSubmission.transaction_reference ||
-                                  'Not provided'}
-                              </span>
-                            </p>
-                            <p className="mt-1 leading-6">
-                              Submitted Amount:{' '}
-                              <span className="font-bold">
-                                {formatCurrency(
-                                  manualSubmission.total_amount_paid
-                                )}
-                              </span>
-                            </p>
-
-                            {manualSubmission.rejection_reason && (
-                              <p className="mt-1 leading-6">
-                                Rejection Reason:{' '}
-                                <span className="font-bold">
-                                  {manualSubmission.rejection_reason}
-                                </span>
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="w-full rounded-3xl border border-gray-100 bg-gray-50 p-5 xl:w-[360px]">
-                      <div className="flex items-center gap-3">
-                        <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-700">
+                      <div className="mt-4 flex items-start gap-3">
+                        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
                           <UserRound className="h-5 w-5" />
                         </div>
 
-                        <div>
-                          <p className="text-sm font-bold text-gray-900">
-                            Admin Record Actions
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            Open related record details
+                        <div className="min-w-0">
+                          <h2 className="line-clamp-2 break-words text-lg font-black leading-6 text-slate-900">
+                            {item.customer?.full_name || 'Unknown member'}
+                          </h2>
+
+                          <p className="mt-1 truncate text-sm font-semibold text-slate-500">
+                            {item.customer?.phone || 'No phone'} •{' '}
+                            {item.fund_space?.name || 'Fund Space'}
                           </p>
                         </div>
                       </div>
 
-                      <div className="mt-5 grid gap-3">
-                        <Link
-                          href={destination}
-                          onClick={(event) => event.stopPropagation()}
-                          className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700"
-                        >
-                          <Eye size={16} />
-                          View Related Details
-                        </Link>
+                      <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                        <CompactInfo
+                          label="Round"
+                          value={
+                            item.round?.round_number
+                              ? `Round ${item.round.round_number}`
+                              : 'Not set'
+                          }
+                        />
 
-                        <Link
-                          href={`/admin/manual-payment-submissions?contribution_id=${encodeURIComponent(
-                            contribution.id
-                          )}`}
-                          onClick={(event) => event.stopPropagation()}
-                          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-5 py-3 text-sm font-bold text-gray-700 shadow-sm transition hover:bg-gray-50"
-                        >
-                          <FileCheck2 size={16} />
-                          View MoMo Verification
-                        </Link>
+                        <CompactInfo
+                          label="Amount Due"
+                          value={formatCurrency(item.amount_due)}
+                        />
 
-                        <Link
-                          href={`/admin/users?search=${encodeURIComponent(
-                            customer?.phone || customer?.full_name || ''
-                          )}`}
-                          onClick={(event) => event.stopPropagation()}
-                          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-5 py-3 text-sm font-bold text-gray-700 shadow-sm transition hover:bg-gray-50"
-                        >
-                          <UsersRound size={16} />
-                          View Customer
-                        </Link>
+                        <CompactInfo
+                          label="Amount Paid"
+                          value={formatCurrency(item.amount_paid)}
+                        />
 
-                        <Link
-                          href={`/admin/fund-space?search=${encodeURIComponent(
-                            fundSpace?.name || ''
-                          )}`}
-                          onClick={(event) => event.stopPropagation()}
-                          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-5 py-3 text-sm font-bold text-gray-700 shadow-sm transition hover:bg-gray-50"
+                        <CompactInfo
+                          label="Outstanding"
+                          value={formatCurrency(
+                            Math.max(
+                              toNumber(item.amount_due) - toNumber(item.amount_paid),
+                              0
+                            )
+                          )}
+                        />
+
+                        <CompactInfo
+                          label="Deadline"
+                          value={formatDate(item.round?.contribution_deadline)}
+                        />
+
+                        <CompactInfo
+                          label="Paid At"
+                          value={formatDateTime(item.paid_at)}
+                        />
+
+                        <CompactInfo
+                          label="Reference"
+                          value={
+                            item.payment_reference ||
+                            item.manual_submission?.transaction_reference ||
+                            'None'
+                          }
+                        />
+
+                        <CompactInfo
+                          label="Agent"
+                          value={item.agent?.full_name || 'No agent'}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                      <p className="mb-4 text-sm font-black text-slate-900">
+                        Contribution Actions
+                      </p>
+
+                      <div className={`mb-4 rounded-2xl border p-4 ${actionState.className}`}>
+                        <p className="text-sm font-black">{actionState.label}</p>
+                        <p className="mt-1 text-xs font-semibold leading-5">
+                          {actionState.description}
+                        </p>
+                      </div>
+
+                      <div className="grid gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedContribution(item)}
+                          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-4 text-sm font-black text-white hover:bg-emerald-800"
                         >
-                          <Wallet size={16} />
-                          View Fund Space
-                        </Link>
+                          <Eye className="h-4 w-4" />
+                          View Details
+                        </button>
+
+                        {item.fund_space_id && (
+                          <Link
+                            href={`/admin/fund-space/${item.fund_space_id}`}
+                            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 hover:bg-slate-50"
+                          >
+                            Fund Space
+                            <ArrowRight className="h-4 w-4" />
+                          </Link>
+                        )}
+
+                        {item.manual_submission?.status === 'PENDING_REVIEW' && (
+                          <Link
+                            href="/admin/manual-payment-submissions?status=PENDING_REVIEW"
+                            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 text-sm font-black text-amber-700 hover:bg-amber-100"
+                          >
+                            <Smartphone className="h-4 w-4" />
+                            Review MoMo
+                          </Link>
+                        )}
+
+                        {isPaid && (
+                          <div className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 text-sm font-black text-emerald-700">
+                            <CheckCircle2 className="h-4 w-4" />
+                            Contribution Paid
+                          </div>
+                        )}
+
+                        {!isPaid && !item.manual_submission && (
+                          <div className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-100 px-4 text-sm font-black text-slate-600">
+                            <Clock className="h-4 w-4" />
+                            Waiting for Payment
+                          </div>
+                        )}
+
+                        {item.manual_submission?.status === 'REJECTED' && (
+                          <div className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 text-sm font-black text-red-700">
+                            <XCircle className="h-4 w-4" />
+                            MoMo Rejected
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
-                </div>
+                </article>
               );
-            })}
+            })
+          )}
+        </section>
+      </div>
+
+      {selectedContribution && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-3 py-4">
+          <div className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+            <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-5 py-4">
+              <div className="min-w-0">
+                <h2 className="text-lg font-black text-slate-900">
+                  Contribution Details
+                </h2>
+
+                <p className="mt-1 truncate text-sm text-slate-500">
+                  {selectedContribution.customer?.full_name || 'Unknown member'}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSelectedContribution(null)}
+                className="rounded-2xl p-2 text-slate-500 hover:bg-slate-100"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-5">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <CompactInfo
+                  label="Member"
+                  value={selectedContribution.customer?.full_name || 'Unknown'}
+                />
+
+                <CompactInfo
+                  label="Phone"
+                  value={selectedContribution.customer?.phone || 'No phone'}
+                />
+
+                <CompactInfo
+                  label="Fund Space"
+                  value={selectedContribution.fund_space?.name || 'Not set'}
+                />
+
+                <CompactInfo
+                  label="Round"
+                  value={
+                    selectedContribution.round?.round_number
+                      ? `Round ${selectedContribution.round.round_number}`
+                      : 'Not set'
+                  }
+                />
+
+                <CompactInfo
+                  label="Contribution Status"
+                  value={formatLabel(selectedContribution.status)}
+                />
+
+                <CompactInfo
+                  label="MoMo Review"
+                  value={formatLabel(
+                    selectedContribution.manual_submission?.status ||
+                      'NO_SUBMISSION'
+                  )}
+                />
+
+                <CompactInfo
+                  label="Amount Due"
+                  value={formatCurrency(selectedContribution.amount_due)}
+                />
+
+                <CompactInfo
+                  label="Amount Paid"
+                  value={formatCurrency(selectedContribution.amount_paid)}
+                />
+
+                <CompactInfo
+                  label="Payment Method"
+                  value={formatLabel(selectedContribution.payment_method)}
+                />
+
+                <CompactInfo
+                  label="Reference"
+                  value={
+                    selectedContribution.payment_reference ||
+                    selectedContribution.manual_submission?.transaction_reference ||
+                    'None'
+                  }
+                />
+
+                <CompactInfo
+                  label="Paid At"
+                  value={formatDateTime(selectedContribution.paid_at)}
+                />
+
+                <CompactInfo
+                  label="Deadline"
+                  value={formatDate(
+                    selectedContribution.round?.contribution_deadline
+                  )}
+                />
+
+                <CompactInfo
+                  label="Payment Timing"
+                  value={formatLabel(selectedContribution.payment_timing)}
+                />
+
+                <CompactInfo
+                  label="Late Fee"
+                  value={formatCurrency(selectedContribution.late_fee_amount)}
+                />
+
+                <CompactInfo
+                  label="Late Fee Status"
+                  value={formatLabel(selectedContribution.late_fee_status)}
+                />
+
+                <CompactInfo
+                  label="Agent"
+                  value={selectedContribution.agent?.full_name || 'No agent'}
+                />
+              </div>
+
+              {selectedContribution.manual_submission?.payment_note && (
+                <div className="mt-5 rounded-2xl bg-slate-50 p-4">
+                  <p className="text-xs font-black uppercase tracking-wide text-slate-400">
+                    Payment Note
+                  </p>
+
+                  <p className="mt-2 whitespace-pre-wrap break-words text-sm font-semibold leading-6 text-slate-700">
+                    {selectedContribution.manual_submission.payment_note}
+                  </p>
+                </div>
+              )}
+
+              {selectedContribution.manual_submission?.rejection_reason && (
+                <div className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-4">
+                  <p className="text-xs font-black uppercase tracking-wide text-red-500">
+                    Rejection Reason
+                  </p>
+
+                  <p className="mt-2 whitespace-pre-wrap break-words text-sm font-semibold leading-6 text-red-700">
+                    {selectedContribution.manual_submission.rejection_reason}
+                  </p>
+                </div>
+              )}
+
+              {selectedContribution.manual_submission && (
+                <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
+                  <p className="text-xs font-black uppercase tracking-wide text-slate-400">
+                    Manual MoMo Submission
+                  </p>
+
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <CompactInfo
+                      label="Sender Name"
+                      value={selectedContribution.manual_submission.sender_name}
+                    />
+
+                    <CompactInfo
+                      label="Sender Phone"
+                      value={selectedContribution.manual_submission.sender_phone}
+                    />
+
+                    <CompactInfo
+                      label="Network"
+                      value={formatLabel(
+                        selectedContribution.manual_submission.sender_network
+                      )}
+                    />
+
+                    <CompactInfo
+                      label="Submitted At"
+                      value={formatDateTime(
+                        selectedContribution.manual_submission.created_at
+                      )}
+                    />
+
+                    <CompactInfo
+                      label="Actual Payment Date"
+                      value={formatDate(
+                        selectedContribution.manual_submission
+                          .actual_payment_date
+                      )}
+                    />
+
+                    <CompactInfo
+                      label="Actual Payment Time"
+                      value={
+                        selectedContribution.manual_submission
+                          .actual_payment_time || 'Not set'
+                      }
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
-        )}
-      </section>
-    </div>
+        </div>
+      )}
+    </main>
   );
 }

@@ -1,87 +1,162 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle,
+  AlertCircle,
   ArrowRight,
   BadgeCheck,
   Banknote,
+  Bell,
   CheckCircle2,
-  Clock,
+  FileWarning,
   HandCoins,
+  LayoutDashboard,
   Loader2,
   RefreshCw,
-  ShieldAlert,
   ShieldCheck,
-  TrendingUp,
+  Smartphone,
   Users,
-  Wallet,
+  WalletCards,
 } from 'lucide-react';
 
 import { supabase } from '@/lib/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
 
-type DashboardStats = {
+type AdminStats = {
   totalUsers: number;
   pendingVerifications: number;
   verifiedUsers: number;
+
+  totalFundSpaces: number;
   activeFundSpaces: number;
   formingFundSpaces: number;
-  pausedFundSpaces: number;
   completedFundSpaces: number;
-  pendingPayouts: number;
-  pendingContributions: number;
-  overdueContributions: number;
+  pausedFundSpaces: number;
+  cancelledFundSpaces: number;
+
+  pendingManualPayments: number;
+  approvedManualPayments: number;
+  rejectedManualPayments: number;
+
+  payoutsPendingApproval: number;
+  payoutsApprovedNotPaid: number;
+  payoutsPaid: number;
+
+  openDisputes: number;
+  underReviewDisputes: number;
+  resolvedDisputes: number;
+
   pendingWithdrawals: number;
-  totalTransactions: number;
+  transactions: number;
 };
 
-const initialStats: DashboardStats = {
+type CountFilter = {
+  column: string;
+  value: string | number | boolean | null;
+};
+
+type ControlCard = {
+  title: string;
+  value: number | string;
+  subtitle: string;
+  href: string;
+  icon?: ReactNode;
+};
+
+type AdminAction = {
+  title: string;
+  description: string;
+  href: string;
+  buttonText: string;
+  value: number;
+  icon: ReactNode;
+  tone: 'emerald' | 'amber' | 'red' | 'slate';
+};
+
+const initialStats: AdminStats = {
   totalUsers: 0,
   pendingVerifications: 0,
   verifiedUsers: 0,
+
+  totalFundSpaces: 0,
   activeFundSpaces: 0,
   formingFundSpaces: 0,
-  pausedFundSpaces: 0,
   completedFundSpaces: 0,
-  pendingPayouts: 0,
-  pendingContributions: 0,
-  overdueContributions: 0,
+  pausedFundSpaces: 0,
+  cancelledFundSpaces: 0,
+
+  pendingManualPayments: 0,
+  approvedManualPayments: 0,
+  rejectedManualPayments: 0,
+
+  payoutsPendingApproval: 0,
+  payoutsApprovedNotPaid: 0,
+  payoutsPaid: 0,
+
+  openDisputes: 0,
+  underReviewDisputes: 0,
+  resolvedDisputes: 0,
+
   pendingWithdrawals: 0,
-  totalTransactions: 0,
+  transactions: 0,
 };
 
-type ColorType =
-  | 'blue'
-  | 'green'
-  | 'yellow'
-  | 'purple'
-  | 'red'
-  | 'emerald'
-  | 'amber';
+function normalize(value: string | null | undefined) {
+  return String(value || '').trim().toUpperCase();
+}
 
-async function getCount(
-  tableName: string,
-  filters?: {
-    column: string;
-    value: string;
-  }[]
-) {
+function formatNumber(value: number | string | null | undefined) {
+  if (typeof value === 'string') return value;
+  return Number(value || 0).toLocaleString('en-GH');
+}
+
+function getToneClass(tone: 'emerald' | 'amber' | 'red' | 'slate') {
+  if (tone === 'emerald') {
+    return {
+      icon: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+      card: 'hover:border-emerald-200',
+      button: 'bg-emerald-700 hover:bg-emerald-800 text-white',
+    };
+  }
+
+  if (tone === 'amber') {
+    return {
+      icon: 'border-amber-200 bg-amber-50 text-amber-700',
+      card: 'hover:border-amber-200',
+      button: 'bg-amber-600 hover:bg-amber-700 text-white',
+    };
+  }
+
+  if (tone === 'red') {
+    return {
+      icon: 'border-red-200 bg-red-50 text-red-700',
+      card: 'hover:border-red-200',
+      button: 'bg-red-600 hover:bg-red-700 text-white',
+    };
+  }
+
+  return {
+    icon: 'border-slate-200 bg-slate-50 text-slate-700',
+    card: 'hover:border-slate-300',
+    button: 'bg-slate-900 hover:bg-slate-800 text-white',
+  };
+}
+
+async function getExactCount(tableName: string, filters: CountFilter[] = []) {
   let query = supabase
     .from(tableName as never)
-    .select('*', { count: 'exact', head: true });
+    .select('*', { count: 'exact', head: true }) as any;
 
-  if (filters) {
-    filters.forEach((filter) => {
-      query = query.eq(filter.column, filter.value);
-    });
-  }
+  filters.forEach((filter) => {
+    query = query.eq(filter.column, filter.value);
+  });
 
   const { count, error } = await query;
 
   if (error) {
-    console.warn(`Admin dashboard count warning for ${tableName}:`, error.message);
+    console.warn(`Admin count warning for ${tableName}:`, error.message);
     return 0;
   }
 
@@ -89,435 +164,559 @@ async function getCount(
 }
 
 export default function AdminDashboardPage() {
-  const [stats, setStats] = useState<DashboardStats>(initialStats);
-  const [loading, setLoading] = useState(true);
+  const { profile, loading } = useAuth();
+
+  const [stats, setStats] = useState<AdminStats>(initialStats);
+  const [pageLoading, setPageLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  useEffect(() => {
-    loadDashboardStats();
-  }, []);
+  const isAdmin = useMemo(() => {
+    const role = normalize(profile?.role);
+    return role === 'ADMIN' || role === 'SUPER_ADMIN';
+  }, [profile?.role]);
 
-  async function loadDashboardStats() {
+  const loadStats = useCallback(async (showRefresh = false) => {
     try {
-      setRefreshing(true);
+      if (showRefresh) {
+        setRefreshing(true);
+      } else {
+        setPageLoading(true);
+      }
+
       setErrorMessage('');
 
       const [
         totalUsers,
         pendingVerifications,
         verifiedUsers,
+
+        totalFundSpaces,
         activeFundSpaces,
         formingFundSpaces,
-        pausedFundSpaces,
         completedFundSpaces,
-        pendingPayouts,
-        pendingContributions,
-        overdueContributions,
+        pausedFundSpaces,
+        cancelledFundSpaces,
+
+        pendingManualPayments,
+        approvedManualPayments,
+        rejectedManualPayments,
+
+        payoutsPendingApproval,
+        payoutsApprovedNotPaid,
+        payoutsPaid,
+
+        openDisputes,
+        underReviewDisputes,
+        resolvedDisputes,
+
         pendingWithdrawals,
-        totalTransactions,
+        transactions,
       ] = await Promise.all([
-        getCount('profiles'),
-        getCount('verification_requests', [
+        getExactCount('profiles'),
+        getExactCount('verification_requests', [
           { column: 'status', value: 'PENDING' },
         ]),
-        getCount('profiles', [
+        getExactCount('profiles', [
           { column: 'verification_status', value: 'VERIFIED' },
         ]),
-        getCount('fund_spaces', [{ column: 'status', value: 'ACTIVE' }]),
-        getCount('fund_spaces', [{ column: 'status', value: 'FORMING' }]),
-        getCount('fund_spaces', [{ column: 'status', value: 'PAUSED' }]),
-        getCount('fund_spaces', [{ column: 'status', value: 'COMPLETED' }]),
-        getCount('fund_space_payouts', [
-          { column: 'status', value: 'PENDING_ADMIN_APPROVAL' },
+
+        getExactCount('fund_spaces'),
+        getExactCount('fund_spaces', [{ column: 'status', value: 'ACTIVE' }]),
+        getExactCount('fund_spaces', [{ column: 'status', value: 'FORMING' }]),
+        getExactCount('fund_spaces', [{ column: 'status', value: 'COMPLETED' }]),
+        getExactCount('fund_spaces', [{ column: 'status', value: 'PAUSED' }]),
+        getExactCount('fund_spaces', [{ column: 'status', value: 'CANCELLED' }]),
+
+        getExactCount('manual_payment_submissions', [
+          { column: 'status', value: 'PENDING_REVIEW' },
         ]),
-        getCount('fund_space_contributions', [
+        getExactCount('manual_payment_submissions', [
+          { column: 'status', value: 'APPROVED' },
+        ]),
+        getExactCount('manual_payment_submissions', [
+          { column: 'status', value: 'REJECTED' },
+        ]),
+
+        getExactCount('fund_space_payouts', [
           { column: 'status', value: 'PENDING' },
         ]),
-        getCount('fund_space_contributions', [
-          { column: 'status', value: 'OVERDUE' },
+        getExactCount('fund_space_payouts', [
+          { column: 'status', value: 'APPROVED' },
         ]),
-        getCount('withdrawal_requests', [
-          { column: 'status', value: 'PENDING' },
+        getExactCount('fund_space_payouts', [{ column: 'status', value: 'PAID' }]),
+
+        getExactCount('fund_space_disputes', [{ column: 'status', value: 'OPEN' }]),
+        getExactCount('fund_space_disputes', [
+          { column: 'status', value: 'UNDER_REVIEW' },
         ]),
-        getCount('transactions'),
+        getExactCount('fund_space_disputes', [
+          { column: 'status', value: 'RESOLVED' },
+        ]),
+
+        getExactCount('withdrawals', [{ column: 'status', value: 'PENDING' }]),
+        getExactCount('transactions'),
       ]);
 
       setStats({
         totalUsers,
         pendingVerifications,
         verifiedUsers,
+
+        totalFundSpaces,
         activeFundSpaces,
         formingFundSpaces,
-        pausedFundSpaces,
         completedFundSpaces,
-        pendingPayouts,
-        pendingContributions,
-        overdueContributions,
-        pendingWithdrawals,
-        totalTransactions,
-      });
-    } catch (error: unknown) {
-      console.error('Admin dashboard error:', error);
+        pausedFundSpaces,
+        cancelledFundSpaces,
 
-      const message =
+        pendingManualPayments,
+        approvedManualPayments,
+        rejectedManualPayments,
+
+        payoutsPendingApproval,
+        payoutsApprovedNotPaid,
+        payoutsPaid,
+
+        openDisputes,
+        underReviewDisputes,
+        resolvedDisputes,
+
+        pendingWithdrawals,
+        transactions,
+      });
+    } catch (error) {
+      console.error('Admin dashboard load error:', error);
+      setErrorMessage(
         error instanceof Error
           ? error.message
-          : 'Something went wrong while loading admin dashboard.';
-
-      setErrorMessage(message);
+          : 'Unable to load admin control center.'
+      );
     } finally {
-      setLoading(false);
+      setPageLoading(false);
       setRefreshing(false);
     }
-  }
+  }, []);
 
-  if (loading) {
+  useEffect(() => {
+    if (loading) return;
+
+    if (!profile?.id) {
+      setPageLoading(false);
+      setErrorMessage('Unable to identify your admin account. Please log in again.');
+      return;
+    }
+
+    if (!isAdmin) {
+      setPageLoading(false);
+      setErrorMessage('You are not authorized to access the admin control center.');
+      return;
+    }
+
+    loadStats();
+  }, [loading, profile?.id, isAdmin, loadStats]);
+
+  const attentionTotal =
+    stats.pendingVerifications +
+    stats.pendingManualPayments +
+    stats.payoutsPendingApproval +
+    stats.payoutsApprovedNotPaid +
+    stats.openDisputes +
+    stats.underReviewDisputes +
+    stats.pendingWithdrawals;
+
+  const controlCards: ControlCard[] = [
+    {
+      title: 'Total Groups',
+      value: stats.totalFundSpaces,
+      subtitle: `${stats.activeFundSpaces} active`,
+      href: '/admin/fund-space',
+      icon: <WalletCards className="h-4 w-4" />,
+    },
+    {
+      title: 'Total Users',
+      value: stats.totalUsers,
+      subtitle: 'All registered profiles',
+      href: '/admin/users',
+      icon: <Users className="h-4 w-4" />,
+    },
+    {
+      title: 'Pending KYC',
+      value: stats.pendingVerifications,
+      subtitle: 'Need verification review',
+      href: '/admin/verifications?status=PENDING',
+      icon: <ShieldCheck className="h-4 w-4" />,
+    },
+    {
+      title: 'MoMo Reviews',
+      value: stats.pendingManualPayments,
+      subtitle: 'Payment submissions',
+      href: '/admin/manual-payment-submissions?status=PENDING_REVIEW',
+      icon: <Smartphone className="h-4 w-4" />,
+    },
+    {
+      title: 'Payout Actions',
+      value: stats.payoutsPendingApproval + stats.payoutsApprovedNotPaid,
+      subtitle: 'Approve or mark paid',
+      href: '/admin/fund-space/payouts',
+      icon: <HandCoins className="h-4 w-4" />,
+    },
+    {
+      title: 'Open Disputes',
+      value: stats.openDisputes + stats.underReviewDisputes,
+      subtitle: 'Support cases',
+      href: '/admin/fund-space/disputes?status=OPEN',
+      icon: <FileWarning className="h-4 w-4" />,
+    },
+    {
+      title: 'Active Groups',
+      value: stats.activeFundSpaces,
+      subtitle: 'Currently running',
+      href: '/admin/fund-space?status=ACTIVE',
+      icon: <CheckCircle2 className="h-4 w-4" />,
+    },
+    {
+      title: 'Forming',
+      value: stats.formingFundSpaces,
+      subtitle: 'Still filling members',
+      href: '/admin/fund-space?status=FORMING',
+      icon: <BadgeCheck className="h-4 w-4" />,
+    },
+    {
+      title: 'Completed',
+      value: stats.completedFundSpaces,
+      subtitle: 'Finished all cycles',
+      href: '/admin/fund-space?status=COMPLETED',
+      icon: <CheckCircle2 className="h-4 w-4" />,
+    },
+    {
+      title: 'Paused',
+      value: stats.pausedFundSpaces,
+      subtitle: 'Temporarily stopped',
+      href: '/admin/fund-space?status=PAUSED',
+      icon: <AlertCircle className="h-4 w-4" />,
+    },
+    {
+      title: 'Cancelled',
+      value: stats.cancelledFundSpaces,
+      subtitle: 'Stopped groups',
+      href: '/admin/fund-space?status=CANCELLED',
+      icon: <AlertCircle className="h-4 w-4" />,
+    },
+  ];
+
+  const adminActions: AdminAction[] = [
+    {
+      title: 'Customer Verification Review',
+      description:
+        'Approve or reject customer KYC requests submitted by agents and users.',
+      href: '/admin/verifications',
+      buttonText: 'Review Verifications',
+      value: stats.pendingVerifications,
+      icon: <ShieldCheck className="h-5 w-5" />,
+      tone: stats.pendingVerifications > 0 ? 'amber' : 'emerald',
+    },
+    {
+      title: 'Manual MoMo Payment Submissions',
+      description:
+        'Check transaction references submitted by members and agents before marking contributions as paid.',
+      href: '/admin/manual-payment-submissions',
+      buttonText: 'Review Payments',
+      value: stats.pendingManualPayments,
+      icon: <Smartphone className="h-5 w-5" />,
+      tone: stats.pendingManualPayments > 0 ? 'amber' : 'emerald',
+    },
+    {
+      title: 'Fund Space Payout Approval',
+      description:
+        'Approve ready payouts, then mark approved payouts as paid after money is sent.',
+      href: '/admin/fund-space/payouts',
+      buttonText: 'Manage Payouts',
+      value: stats.payoutsPendingApproval + stats.payoutsApprovedNotPaid,
+      icon: <HandCoins className="h-5 w-5" />,
+      tone:
+        stats.payoutsPendingApproval + stats.payoutsApprovedNotPaid > 0
+          ? 'amber'
+          : 'emerald',
+    },
+    {
+      title: 'Fund Space Disputes',
+      description:
+        'Review payment, payout, contribution status, late fee, and customer support cases.',
+      href: '/admin/fund-space/disputes',
+      buttonText: 'Resolve Disputes',
+      value: stats.openDisputes + stats.underReviewDisputes,
+      icon: <FileWarning className="h-5 w-5" />,
+      tone: stats.openDisputes + stats.underReviewDisputes > 0 ? 'red' : 'emerald',
+    },
+    {
+      title: 'Withdrawal Requests',
+      description:
+        'Review pending withdrawal requests and make sure user balances are protected.',
+      href: '/admin/withdrawals',
+      buttonText: 'Review Withdrawals',
+      value: stats.pendingWithdrawals,
+      icon: <Banknote className="h-5 w-5" />,
+      tone: stats.pendingWithdrawals > 0 ? 'amber' : 'emerald',
+    },
+  ];
+
+  if (loading || pageLoading) {
     return (
-      <div className="flex min-h-[500px] items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="mx-auto h-10 w-10 animate-spin text-emerald-600" />
-          <p className="mt-3 text-sm text-gray-500">
-            Loading admin dashboard...
-          </p>
+      <main className="min-h-screen bg-slate-50 px-4 py-6 md:px-8">
+        <div className="mx-auto flex min-h-[60vh] max-w-7xl items-center justify-center">
+          <div className="text-center">
+            <Loader2 className="mx-auto mb-4 h-10 w-10 animate-spin text-emerald-700" />
+            <h1 className="text-lg font-black text-slate-900">
+              Loading admin control center...
+            </h1>
+            <p className="mt-2 text-sm text-slate-500">
+              Please wait while TrustPoint loads platform activity.
+            </p>
+          </div>
         </div>
-      </div>
+      </main>
     );
   }
 
   return (
-    <div className="space-y-8">
-      {errorMessage && (
-        <div className="rounded-2xl border border-red-100 bg-red-50 px-5 py-4 text-sm font-semibold text-red-700">
-          {errorMessage}
-        </div>
-      )}
+    <main className="min-h-screen bg-slate-50 px-4 py-5 md:px-8">
+      <div className="mx-auto max-w-7xl space-y-5">
+        <section className="rounded-[2rem] bg-gradient-to-br from-emerald-950 via-emerald-900 to-emerald-800 p-5 text-white shadow-sm md:p-8">
+          <div className="flex flex-col justify-between gap-6 xl:flex-row xl:items-start">
+            <div className="min-w-0 max-w-4xl">
+              <p className="mb-5 inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-xs font-black">
+                <LayoutDashboard className="h-4 w-4" />
+                Admin Control Center
+              </p>
 
-      <div className="rounded-3xl bg-gradient-to-r from-emerald-700 via-emerald-600 to-teal-600 p-6 text-white shadow-sm md:p-8">
-        <div className="flex flex-col justify-between gap-6 lg:flex-row lg:items-center">
-          <div>
-            <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-2 text-sm font-semibold text-emerald-50">
-              <ShieldCheck className="h-4 w-4" />
-              Super Admin Control Center
+              <h1 className="break-words text-3xl font-black tracking-tight md:text-5xl">
+                TrustPoint Admin Dashboard
+              </h1>
+
+              <p className="mt-4 max-w-3xl text-sm font-semibold leading-7 text-emerald-50 md:text-base">
+                One simple control page for verifications, Fund Spaces, members,
+                rounds, MoMo payment submissions, payouts, disputes, and admin
+                actions.
+              </p>
             </div>
 
-            <h1 className="text-3xl font-black md:text-4xl">
-              TrustPoint Fund Space Admin
-            </h1>
-
-            <p className="mt-4 max-w-3xl text-sm leading-7 text-emerald-50 md:text-base">
-              Monitor users, verification requests, Fund Space groups, contributions,
-              payouts, withdrawals, and transaction activity from one admin dashboard.
-            </p>
-
-            <div className="mt-6 flex flex-wrap gap-3">
+            <div className="flex flex-wrap gap-2">
               <Link
                 href="/admin/fund-space"
-                className="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-emerald-700 hover:bg-emerald-50"
+                className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-white/25 bg-white/10 px-4 text-xs font-black text-white transition hover:bg-white/20"
               >
-                <Users size={16} />
-                Fund Space Management
+                <Bell className="h-3.5 w-3.5" />
+                Fund Space
               </Link>
 
               <Link
-                href="/admin/fund-space/contributions"
-                className="inline-flex items-center gap-2 rounded-xl bg-white/15 px-5 py-3 text-sm font-bold text-white ring-1 ring-white/20 hover:bg-white/20"
+                href="/admin/manual-payment-submissions"
+                className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-white/25 bg-white/10 px-4 text-xs font-black text-white transition hover:bg-white/20"
               >
-                <HandCoins size={16} />
-                Contributions
+                <Smartphone className="h-3.5 w-3.5" />
+                Process
               </Link>
 
-              <Link
-                href="/admin/fund-space/payouts"
-                className="inline-flex items-center gap-2 rounded-xl bg-white/15 px-5 py-3 text-sm font-bold text-white ring-1 ring-white/20 hover:bg-white/20"
+              <button
+                type="button"
+                onClick={() => loadStats(true)}
+                disabled={refreshing}
+                className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full bg-white px-4 text-xs font-black text-emerald-900 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                <Banknote size={16} />
-                Payouts
-              </Link>
+                {refreshing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                Refresh
+              </button>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={loadDashboardStats}
-            disabled={refreshing}
-            className="inline-flex min-h-12 w-fit items-center justify-center gap-2 rounded-xl bg-white/15 px-5 py-3 text-sm font-bold text-white hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
-            Refresh Dashboard
-          </button>
-        </div>
+          <div className="mt-7 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+            {controlCards.slice(0, 6).map((card) => (
+              <ControlStatCard key={card.title} card={card} />
+            ))}
+          </div>
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+            {controlCards.slice(6).map((card) => (
+              <ControlStatCard key={card.title} card={card} />
+            ))}
+          </div>
+        </section>
+
+        {errorMessage && (
+          <section className="rounded-3xl border border-red-200 bg-red-50 p-5 text-sm font-bold text-red-700">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+              <div className="min-w-0">
+                <p className="break-words">{errorMessage}</p>
+
+                {errorMessage.toLowerCase().includes('session') && (
+                  <Link
+                    href="/auth/login"
+                    className="mt-3 inline-flex rounded-xl bg-white px-4 py-2 text-xs font-black text-red-700 shadow-sm"
+                  >
+                    Go to login
+                  </Link>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
+        <section className="grid gap-5 xl:grid-cols-[1fr_380px]">
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+              <div className="min-w-0">
+                <h2 className="text-xl font-black text-slate-900">
+                  Admin Work Queue
+                </h2>
+                <p className="mt-1 text-sm font-semibold leading-6 text-slate-500">
+                  Start from items that affect customer trust: KYC, payment
+                  approval, payout release, and disputes.
+                </p>
+              </div>
+
+              {attentionTotal > 0 && (
+                <span className="inline-flex w-fit rounded-full bg-red-600 px-4 py-2 text-xs font-black text-white">
+                  {formatNumber(attentionTotal)} need attention
+                </span>
+              )}
+            </div>
+
+            <div className="mt-5 space-y-3">
+              {adminActions.map((action) => (
+                <ActionRow key={action.href} action={action} />
+              ))}
+            </div>
+          </div>
+
+          <aside className="space-y-5">
+            <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-lg font-black text-slate-900">
+                Status Meaning
+              </h2>
+              <p className="mt-1 text-sm font-semibold leading-6 text-slate-500">
+                Completed groups are not the same as active groups.
+              </p>
+
+              <div className="mt-5 space-y-3">
+                <MiniInfo label="Active" value="Currently running" />
+                <MiniInfo label="Forming" value="Still accepting members" />
+                <MiniInfo label="Completed" value="Finished all payout cycles" />
+                <MiniInfo label="Paused" value="Temporarily stopped" />
+                <MiniInfo label="Cancelled" value="Stopped before completion" />
+              </div>
+            </section>
+
+            <section className="rounded-3xl border border-amber-100 bg-amber-50 p-5">
+              <div className="flex items-start gap-3">
+                <ShieldCheck className="mt-1 h-5 w-5 shrink-0 text-amber-700" />
+
+                <div className="min-w-0">
+                  <h2 className="text-base font-black text-amber-900">
+                    Admin Responsibility Reminder
+                  </h2>
+
+                  <p className="mt-2 break-words text-sm font-semibold leading-6 text-amber-700">
+                    Verify identities carefully, approve only real MoMo
+                    transactions, release payouts only after confirming group
+                    readiness, and resolve disputes with clear notes.
+                  </p>
+                </div>
+              </div>
+            </section>
+          </aside>
+        </section>
       </div>
-
-      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Total Users"
-          value={stats.totalUsers}
-          icon={<Users className="h-5 w-5" />}
-          color="blue"
-        />
-
-        <StatCard
-          title="Verified Users"
-          value={stats.verifiedUsers}
-          icon={<BadgeCheck className="h-5 w-5" />}
-          color="green"
-        />
-
-        <StatCard
-          title="Pending Verifications"
-          value={stats.pendingVerifications}
-          icon={<Clock className="h-5 w-5" />}
-          color="yellow"
-          href="/admin/verifications"
-        />
-
-        <StatCard
-          title="Transactions"
-          value={stats.totalTransactions}
-          icon={<Banknote className="h-5 w-5" />}
-          color="purple"
-          href="/admin/transactions"
-        />
-      </div>
-
-      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Active Fund Spaces"
-          value={stats.activeFundSpaces}
-          icon={<CheckCircle2 className="h-5 w-5" />}
-          color="emerald"
-          href="/admin/fund-space"
-        />
-
-        <StatCard
-          title="Forming Fund Spaces"
-          value={stats.formingFundSpaces}
-          icon={<Users className="h-5 w-5" />}
-          color="blue"
-          href="/admin/fund-space"
-        />
-
-        <StatCard
-          title="Paused Fund Spaces"
-          value={stats.pausedFundSpaces}
-          icon={<ShieldAlert className="h-5 w-5" />}
-          color="purple"
-          href="/admin/fund-space"
-        />
-
-        <StatCard
-          title="Completed Fund Spaces"
-          value={stats.completedFundSpaces}
-          icon={<BadgeCheck className="h-5 w-5" />}
-          color="green"
-          href="/admin/fund-space"
-        />
-      </div>
-
-      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Pending Payouts"
-          value={stats.pendingPayouts}
-          icon={<Wallet className="h-5 w-5" />}
-          color="yellow"
-          href="/admin/fund-space/payouts"
-        />
-
-        <StatCard
-          title="Pending Contributions"
-          value={stats.pendingContributions}
-          icon={<HandCoins className="h-5 w-5" />}
-          color="amber"
-          href="/admin/fund-space/contributions"
-        />
-
-        <StatCard
-          title="Overdue Contributions"
-          value={stats.overdueContributions}
-          icon={<AlertTriangle className="h-5 w-5" />}
-          color="red"
-          href="/admin/fund-space/contributions"
-        />
-
-        <StatCard
-          title="Pending Withdrawals"
-          value={stats.pendingWithdrawals}
-          icon={<TrendingUp className="h-5 w-5" />}
-          color="red"
-          href="/admin/withdrawals"
-        />
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-3">
-        <AdminActionCard
-          title="Review Verifications"
-          description="Approve or reject customer verification requests before users can join Fund Space groups."
-          href="/admin/verifications"
-          icon={<BadgeCheck className="h-6 w-6" />}
-          buttonText="Open Verifications"
-          color="emerald"
-        />
-
-        <AdminActionCard
-          title="Manage Fund Spaces"
-          description="View forming groups, active groups, member payout order, rounds, and member default management."
-          href="/admin/fund-space"
-          icon={<Users className="h-6 w-6" />}
-          buttonText="Open Fund Space"
-          color="emerald"
-        />
-
-        <AdminActionCard
-          title="Approve Fund Space Payouts"
-          description="Review completed contribution rounds and approve or mark member payouts as paid."
-          href="/admin/fund-space/payouts"
-          icon={<Wallet className="h-6 w-6" />}
-          buttonText="Open Payouts"
-          color="amber"
-        />
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-3">
-        <AdminActionCard
-          title="Monitor Contributions"
-          description="Track pending, paid, overdue, failed, and defaulted contribution records across all Fund Space groups."
-          href="/admin/fund-space/contributions"
-          icon={<HandCoins className="h-6 w-6" />}
-          buttonText="Open Contributions"
-          color="emerald"
-        />
-
-        <AdminActionCard
-          title="Withdrawal Requests"
-          description="Review withdrawal requests and monitor pending customer or agent withdrawals."
-          href="/admin/withdrawals"
-          icon={<TrendingUp className="h-6 w-6" />}
-          buttonText="Open Withdrawals"
-          color="red"
-        />
-
-        <AdminActionCard
-          title="System Transactions"
-          description="View wallet movements, payments, deductions, payout records, and transaction history."
-          href="/admin/transactions"
-          icon={<Banknote className="h-6 w-6" />}
-          buttonText="Open Transactions"
-          color="purple"
-        />
-      </div>
-
-      <div className="rounded-3xl border border-emerald-100 bg-emerald-50 p-6">
-        <h2 className="text-lg font-bold text-emerald-800">
-          Admin Workflow Reminder
-        </h2>
-        <p className="mt-2 text-sm leading-6 text-emerald-700">
-          Start with verification requests, monitor Fund Space group formation, confirm
-          contributions, check overdue/default-risk members, then approve payouts when rounds
-          become ready.
-        </p>
-      </div>
-    </div>
+    </main>
   );
 }
 
-function StatCard({
-  title,
-  value,
-  icon,
-  color,
-  href,
-}: {
-  title: string;
-  value: number;
-  icon: ReactNode;
-  color: ColorType;
-  href?: string;
-}) {
-  const colorClasses: Record<ColorType, string> = {
-    blue: 'bg-blue-50 text-blue-700 border-blue-100',
-    green: 'bg-green-50 text-green-700 border-green-100',
-    yellow: 'bg-yellow-50 text-yellow-700 border-yellow-100',
-    purple: 'bg-purple-50 text-purple-700 border-purple-100',
-    red: 'bg-red-50 text-red-700 border-red-100',
-    emerald: 'bg-emerald-50 text-emerald-700 border-emerald-100',
-    amber: 'bg-amber-50 text-amber-700 border-amber-100',
-  };
-
-  const card = (
-    <div className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-semibold text-gray-500">{title}</p>
-          <p className="mt-3 text-3xl font-black text-gray-950">{value}</p>
-        </div>
-
-        <div
-          className={`flex h-12 w-12 items-center justify-center rounded-2xl border ${colorClasses[color]}`}
-        >
-          {icon}
-        </div>
-      </div>
-    </div>
-  );
-
-  if (!href) return card;
-
+function ControlStatCard({ card }: { card: ControlCard }) {
   return (
-    <Link href={href} className="block">
-      {card}
+    <Link
+      href={card.href}
+      className="group min-w-0 rounded-2xl border border-white/70 bg-white/10 p-4 text-white transition hover:-translate-y-0.5 hover:bg-white/20 hover:shadow-lg"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <p className="break-words text-[11px] font-black uppercase tracking-wide text-emerald-50">
+          {card.title}
+        </p>
+        <span className="text-emerald-50 opacity-80 transition group-hover:translate-x-0.5">
+          {card.icon || <ArrowRight className="h-4 w-4" />}
+        </span>
+      </div>
+
+      <p className="mt-3 truncate text-2xl font-black text-white">
+        {formatNumber(card.value)}
+      </p>
+
+      <p className="mt-2 break-words text-xs font-bold leading-5 text-emerald-50/90">
+        {card.subtitle}
+      </p>
     </Link>
   );
 }
 
-function AdminActionCard({
-  title,
-  description,
-  href,
-  icon,
-  buttonText,
-  color,
-}: {
-  title: string;
-  description: string;
-  href: string;
-  icon: ReactNode;
-  buttonText: string;
-  color: 'emerald' | 'amber' | 'red' | 'purple';
-}) {
-  const iconClasses = {
-    emerald: 'bg-emerald-50 text-emerald-700',
-    amber: 'bg-amber-50 text-amber-700',
-    red: 'bg-red-50 text-red-700',
-    purple: 'bg-purple-50 text-purple-700',
-  };
-
-  const buttonClasses = {
-    emerald: 'bg-emerald-600 hover:bg-emerald-700',
-    amber: 'bg-amber-600 hover:bg-amber-700',
-    red: 'bg-red-600 hover:bg-red-700',
-    purple: 'bg-purple-600 hover:bg-purple-700',
-  };
+function ActionRow({ action }: { action: AdminAction }) {
+  const tone = getToneClass(action.tone);
 
   return (
-    <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
-      <div
-        className={`flex h-12 w-12 items-center justify-center rounded-2xl ${iconClasses[color]}`}
-      >
-        {icon}
+    <Link
+      href={action.href}
+      className={`block rounded-3xl border border-slate-200 bg-slate-50 p-4 transition hover:bg-white hover:shadow-sm ${tone.card}`}
+    >
+      <div className="grid gap-4 xl:grid-cols-[1fr_auto] xl:items-center">
+        <div className="flex min-w-0 items-start gap-3">
+          <div
+            className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border ${tone.icon}`}
+          >
+            {action.icon}
+          </div>
+
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="break-words text-base font-black text-slate-900">
+                {action.title}
+              </h3>
+
+              {action.value > 0 && (
+                <span className="rounded-full bg-red-600 px-2.5 py-1 text-xs font-black text-white">
+                  {formatNumber(action.value)}
+                </span>
+              )}
+            </div>
+
+            <p className="mt-1 break-words text-sm font-semibold leading-6 text-slate-500">
+              {action.description}
+            </p>
+          </div>
+        </div>
+
+        <div
+          className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl px-4 text-sm font-black xl:w-56 ${tone.button}`}
+        >
+          {action.buttonText}
+          <ArrowRight className="h-4 w-4" />
+        </div>
       </div>
+    </Link>
+  );
+}
 
-      <h2 className="mt-5 text-xl font-black text-gray-950">{title}</h2>
-
-      <p className="mt-3 text-sm leading-6 text-gray-500">{description}</p>
-
-      <Link
-        href={href}
-        className={`mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-bold text-white ${buttonClasses[color]}`}
-      >
-        {buttonText}
-        <ArrowRight className="h-4 w-4" />
-      </Link>
+function MiniInfo({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl bg-slate-50 p-4">
+      <p className="text-[11px] font-black uppercase tracking-wide text-slate-400">
+        {label}
+      </p>
+      <p className="mt-1 break-words text-sm font-black text-slate-900">
+        {value}
+      </p>
     </div>
   );
 }

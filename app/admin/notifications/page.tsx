@@ -1,10 +1,12 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import {
   AlertCircle,
+  ArrowLeft,
   ArrowRight,
   Bell,
   CheckCheck,
@@ -95,6 +97,20 @@ type ApiResponse = {
   pagination?: Pagination;
 };
 
+type MessageState = {
+  type: 'success' | 'error' | 'info';
+  text: string;
+};
+
+type StatCardItem = {
+  title: string;
+  value: number;
+  description: string;
+  icon: ReactNode;
+  href: string;
+  tone: 'emerald' | 'amber' | 'red' | 'blue' | 'indigo' | 'gray';
+};
+
 const defaultStats: NotificationStats = {
   all: 0,
   unread: 0,
@@ -123,6 +139,7 @@ const filters: {
 }[] = [
   { label: 'All', value: 'ALL', statKey: 'all' },
   { label: 'Unread', value: 'UNREAD', statKey: 'unread' },
+  { label: 'Read', value: 'READ', statKey: 'read' },
   { label: 'MoMo Payments', value: 'MANUAL_PAYMENT', statKey: 'manual_payment' },
   {
     label: 'Awaiting Review',
@@ -145,14 +162,30 @@ const filters: {
   { label: 'General', value: 'GENERAL', statKey: 'general' },
 ];
 
+const allowedFilters: AdminNotificationFilter[] = [
+  'ALL',
+  'UNREAD',
+  'READ',
+  'MANUAL_PAYMENT',
+  'AWAITING_REVIEW',
+  'REJECTED_PAYMENT',
+  'APPROVED_PAYMENT',
+  'PAYOUT',
+  'VERIFICATION',
+  'FUND_SPACE',
+  'GENERAL',
+];
+
+function normalize(value: string | null | undefined) {
+  return String(value || '').trim().toUpperCase();
+}
+
 function formatDateTime(value: string | null | undefined) {
   if (!value) return 'Not available';
 
   const date = new Date(value);
 
-  if (Number.isNaN(date.getTime())) {
-    return 'Invalid date';
-  }
+  if (Number.isNaN(date.getTime())) return 'Invalid date';
 
   return new Intl.DateTimeFormat('en-GH', {
     year: 'numeric',
@@ -177,6 +210,91 @@ function formatLabel(value: string | null | undefined) {
     .replaceAll('_', ' ')
     .toLowerCase()
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function getNotificationCategoryLabel(category: string | null | undefined) {
+  const value = normalize(category);
+
+  if (value === 'MANUAL_PAYMENT') return 'MoMo Payment';
+  if (value === 'AWAITING_REVIEW') return 'Payment Review';
+  if (value === 'REJECTED_PAYMENT') return 'Rejected MoMo';
+  if (value === 'APPROVED_PAYMENT') return 'Approved MoMo';
+  if (value === 'PAYOUT') return 'Payout Alert';
+  if (value === 'VERIFICATION') return 'Verification';
+  if (value === 'FUND_SPACE') return 'Fund Space';
+  if (value === 'GENERAL') return 'System Alert';
+
+  return formatLabel(category);
+}
+
+function getNotificationSourceLabel(source: AdminNotificationItem['source']) {
+  if (source === 'MANUAL_PAYMENT_SYSTEM') return 'MoMo payment system';
+
+  return 'Database notification';
+}
+
+function getActionLabel(label: string | null | undefined) {
+  const value = String(label || '').trim();
+
+  if (!value) return 'Open';
+
+  return value
+    .replaceAll('Manual Payment', 'MoMo Payment')
+    .replaceAll('Manual MoMo', 'MoMo Payment')
+    .replaceAll('Manual payment', 'MoMo payment')
+    .replaceAll('manual payment', 'MoMo payment')
+    .replaceAll('Manual', 'MoMo');
+}
+
+function getNotificationTitle(item: AdminNotificationItem) {
+  const category = normalize(item.category);
+
+  if (category === 'AWAITING_REVIEW') return 'MoMo Payment Awaiting Review';
+  if (category === 'REJECTED_PAYMENT') return 'MoMo Payment Rejected';
+  if (category === 'APPROVED_PAYMENT') return 'MoMo Payment Approved';
+  if (category === 'MANUAL_PAYMENT') return 'MoMo Payment Alert';
+  if (category === 'PAYOUT') return 'Payout Alert';
+  if (category === 'VERIFICATION') return 'Verification Alert';
+  if (category === 'FUND_SPACE') return 'Fund Space Alert';
+
+  return item.title
+    .replaceAll('Manual Payment', 'MoMo Payment')
+    .replaceAll('Manual MoMo', 'MoMo Payment')
+    .replaceAll('Manual payment', 'MoMo payment')
+    .replaceAll('manual payment', 'MoMo payment')
+    .replaceAll('Manual', 'MoMo');
+}
+
+function getNotificationMessage(item: AdminNotificationItem) {
+  const category = normalize(item.category);
+
+  if (category === 'AWAITING_REVIEW') {
+    return 'A MoMo payment reference has been submitted and is waiting for admin review.';
+  }
+
+  if (category === 'REJECTED_PAYMENT') {
+    return (
+      item.rejection_reason ||
+      'A MoMo payment reference was reviewed and rejected.'
+    );
+  }
+
+  if (category === 'APPROVED_PAYMENT') {
+    return 'A MoMo payment has been reviewed, approved, and recorded successfully.';
+  }
+
+  if (category === 'MANUAL_PAYMENT') {
+    return 'A MoMo payment activity has been recorded for Fund Space review.';
+  }
+
+  return item.message
+    .replaceAll('manual MoMo payment submissions', 'MoMo payment submissions')
+    .replaceAll('manual MoMo payment', 'MoMo payment')
+    .replaceAll('Manual MoMo payment', 'MoMo payment')
+    .replaceAll('manual payment', 'MoMo payment')
+    .replaceAll('Manual payment', 'MoMo payment')
+    .replaceAll('manual', 'MoMo')
+    .replaceAll('Manual', 'MoMo');
 }
 
 function getNotificationIcon(item: AdminNotificationItem) {
@@ -212,7 +330,7 @@ function getNotificationIcon(item: AdminNotificationItem) {
 
 function getNotificationStyle(item: AdminNotificationItem) {
   if (item.is_read && item.source === 'DATABASE') {
-    return 'border-gray-100 bg-gray-50 text-gray-500';
+    return 'border-slate-200 bg-slate-50 text-slate-600';
   }
 
   if (item.category === 'AWAITING_REVIEW') {
@@ -243,7 +361,7 @@ function getNotificationStyle(item: AdminNotificationItem) {
     return 'border-teal-200 bg-teal-50 text-teal-700';
   }
 
-  return 'border-gray-100 bg-white text-gray-700';
+  return 'border-slate-200 bg-white text-slate-700';
 }
 
 function getPriorityStyle(priority: AdminNotificationItem['priority']) {
@@ -255,61 +373,135 @@ function getPriorityStyle(priority: AdminNotificationItem['priority']) {
     return 'border-amber-100 bg-amber-50 text-amber-700';
   }
 
-  return 'border-gray-100 bg-gray-50 text-gray-600';
+  return 'border-slate-100 bg-slate-50 text-slate-600';
 }
 
 function buildFilterUrl(filter: AdminNotificationFilter) {
   return `/admin/notifications?filter=${encodeURIComponent(filter)}`;
 }
 
-function StatCard({
-  title,
-  value,
-  description,
-  icon,
-  href,
-  tone,
-}: {
-  title: string;
-  value: number;
-  description: string;
-  icon: ReactNode;
-  href: string;
-  tone: 'emerald' | 'amber' | 'red' | 'blue' | 'indigo' | 'gray';
-}) {
+function getFilterFromSearchParams(searchParams: { get: (key: string) => string | null }) {
+  const value = normalize(searchParams.get('filter'));
+
+  return allowedFilters.includes(value as AdminNotificationFilter)
+    ? (value as AdminNotificationFilter)
+    : 'ALL';
+}
+
+async function readApiJson(response: Response): Promise<ApiResponse> {
+  const text = await response.text();
+
+  if (!text) {
+    return {
+      success: false,
+      message: 'The server returned an empty response.',
+    };
+  }
+
+  try {
+    return JSON.parse(text) as ApiResponse;
+  } catch {
+    return {
+      success: false,
+      message: 'The server returned an invalid response.',
+    };
+  }
+}
+
+function StatCard({ item }: { item: StatCardItem }) {
   const styles = {
-    emerald: 'bg-emerald-50 text-emerald-700 group-hover:bg-emerald-600 group-hover:text-white',
-    amber: 'bg-amber-50 text-amber-700 group-hover:bg-amber-500 group-hover:text-white',
+    emerald:
+      'bg-emerald-50 text-emerald-700 group-hover:bg-emerald-600 group-hover:text-white',
+    amber:
+      'bg-amber-50 text-amber-700 group-hover:bg-amber-500 group-hover:text-white',
     red: 'bg-red-50 text-red-700 group-hover:bg-red-600 group-hover:text-white',
     blue: 'bg-blue-50 text-blue-700 group-hover:bg-blue-600 group-hover:text-white',
-    indigo: 'bg-indigo-50 text-indigo-700 group-hover:bg-indigo-600 group-hover:text-white',
-    gray: 'bg-gray-50 text-gray-700 group-hover:bg-gray-900 group-hover:text-white',
+    indigo:
+      'bg-indigo-50 text-indigo-700 group-hover:bg-indigo-600 group-hover:text-white',
+    gray: 'bg-slate-50 text-slate-700 group-hover:bg-slate-900 group-hover:text-white',
   };
 
   return (
     <Link
-      href={href}
-      className="group block rounded-3xl border border-gray-100 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-md"
+      href={item.href}
+      className="group block min-w-0 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-md"
     >
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-bold text-gray-500">{title}</p>
-          <h3 className="mt-2 text-3xl font-black text-gray-900">{value}</h3>
-          <p className="mt-1 text-sm leading-6 text-gray-500">{description}</p>
+      <div className="flex min-w-0 items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="min-w-0 break-words text-sm font-black text-slate-500 [overflow-wrap:anywhere]">
+            {item.title}
+          </p>
+
+          <h3 className="mt-2 min-w-0 break-words text-[clamp(1.5rem,5vw,2rem)] font-black leading-tight text-slate-900 [overflow-wrap:anywhere]">
+            {item.value}
+          </h3>
+
+          <p className="mt-1 min-w-0 break-words text-sm leading-6 text-slate-500 [overflow-wrap:anywhere]">
+            {item.description}
+          </p>
+
           <p className="mt-3 inline-flex items-center gap-1 text-xs font-black text-emerald-700 opacity-0 transition group-hover:opacity-100">
             Open filtered view <ArrowRight className="h-3.5 w-3.5" />
           </p>
         </div>
 
-        <div className={`rounded-2xl p-3 transition ${styles[tone]}`}>
-          {icon}
+        <div className={`shrink-0 rounded-2xl p-3 transition ${styles[item.tone]}`}>
+          {item.icon}
         </div>
       </div>
     </Link>
   );
 }
 
+function MessageBox({ message }: { message: MessageState }) {
+  return (
+    <div
+      className={`flex items-start gap-3 rounded-3xl border p-5 ${
+        message.type === 'success'
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          : message.type === 'info'
+            ? 'border-blue-200 bg-blue-50 text-blue-700'
+            : 'border-red-200 bg-red-50 text-red-700'
+      }`}
+    >
+      {message.type === 'success' ? (
+        <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
+      ) : message.type === 'info' ? (
+        <Info className="mt-0.5 h-5 w-5 shrink-0" />
+      ) : (
+        <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+      )}
+
+      <p className="min-w-0 break-words text-sm font-bold leading-6 [overflow-wrap:anywhere]">
+        {message.text}
+      </p>
+    </div>
+  );
+}
+
+function MiniInfo({
+  label,
+  value,
+}: {
+  label: string;
+  value: ReactNode;
+}) {
+  return (
+    <div className="min-w-0 rounded-2xl bg-white/75 p-4">
+      <p className="break-words text-xs font-black uppercase tracking-wide text-slate-400 [overflow-wrap:anywhere]">
+        {label}
+      </p>
+
+      <div className="mt-1 min-w-0 break-words text-sm font-black text-slate-900 [overflow-wrap:anywhere]">
+        {value || 'Not set'}
+      </div>
+    </div>
+  );
+}
+
 export default function AdminNotificationsPage() {
+  const searchParams = useSearchParams();
+
   const [notifications, setNotifications] = useState<AdminNotificationItem[]>(
     []
   );
@@ -320,35 +512,78 @@ export default function AdminNotificationsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
-  const [message, setMessage] = useState<{
-    type: 'success' | 'error' | 'info';
-    text: string;
-  } | null>(null);
+  const [message, setMessage] = useState<MessageState | null>(null);
 
   const queryFilter = useMemo(() => {
-    if (typeof window === 'undefined') return 'ALL';
+    return getFilterFromSearchParams(searchParams);
+  }, [searchParams]);
 
-    const params = new URLSearchParams(window.location.search);
-    const value = String(params.get('filter') || 'ALL').toUpperCase();
-
-    const allowed: AdminNotificationFilter[] = [
-      'ALL',
-      'UNREAD',
-      'READ',
-      'MANUAL_PAYMENT',
-      'AWAITING_REVIEW',
-      'REJECTED_PAYMENT',
-      'APPROVED_PAYMENT',
-      'PAYOUT',
-      'VERIFICATION',
-      'FUND_SPACE',
-      'GENERAL',
-    ];
-
-    return allowed.includes(value as AdminNotificationFilter)
-      ? (value as AdminNotificationFilter)
-      : 'ALL';
-  }, []);
+  const statCards: StatCardItem[] = [
+    {
+      title: 'Awaiting MoMo Review',
+      value: stats.awaiting_review,
+      description: 'Payment references waiting for admin confirmation',
+      icon: <Clock className="h-5 w-5" />,
+      href: buildFilterUrl('AWAITING_REVIEW'),
+      tone: 'amber',
+    },
+    {
+      title: 'MoMo Payment Alerts',
+      value: stats.manual_payment,
+      description: 'All MoMo payment system alerts',
+      icon: <Smartphone className="h-5 w-5" />,
+      href: buildFilterUrl('MANUAL_PAYMENT'),
+      tone: 'emerald',
+    },
+    {
+      title: 'Rejected MoMo',
+      value: stats.rejected_payment,
+      description: 'Rejected MoMo payment records',
+      icon: <XCircle className="h-5 w-5" />,
+      href: buildFilterUrl('REJECTED_PAYMENT'),
+      tone: 'red',
+    },
+    {
+      title: 'Unread',
+      value: stats.unread,
+      description: 'Unread database notifications',
+      icon: <Bell className="h-5 w-5" />,
+      href: buildFilterUrl('UNREAD'),
+      tone: 'blue',
+    },
+    {
+      title: 'Approved MoMo',
+      value: stats.approved_payment,
+      description: 'Confirmed MoMo payment records',
+      icon: <CheckCircle2 className="h-5 w-5" />,
+      href: buildFilterUrl('APPROVED_PAYMENT'),
+      tone: 'emerald',
+    },
+    {
+      title: 'Payout Alerts',
+      value: stats.payout,
+      description: 'Payout related admin notifications',
+      icon: <HandCoins className="h-5 w-5" />,
+      href: buildFilterUrl('PAYOUT'),
+      tone: 'indigo',
+    },
+    {
+      title: 'Verifications',
+      value: stats.verification,
+      description: 'Customer and account verification alerts',
+      icon: <ShieldCheck className="h-5 w-5" />,
+      href: buildFilterUrl('VERIFICATION'),
+      tone: 'blue',
+    },
+    {
+      title: 'Fund Space',
+      value: stats.fund_space,
+      description: 'Round, contribution, and group alerts',
+      icon: <Users className="h-5 w-5" />,
+      href: buildFilterUrl('FUND_SPACE'),
+      tone: 'gray',
+    },
+  ];
 
   const getToken = async () => {
     const {
@@ -390,7 +625,7 @@ export default function AdminNotificationsPage() {
           }
         );
 
-        const result = (await response.json()) as ApiResponse;
+        const result = await readApiJson(response);
 
         if (!response.ok || !result.success) {
           throw new Error(result.message || 'Could not load notifications.');
@@ -400,6 +635,8 @@ export default function AdminNotificationsPage() {
         setStats(result.stats || defaultStats);
         setPagination(result.pagination || defaultPagination);
       } catch (error) {
+        setNotifications([]);
+        setStats(defaultStats);
         setMessage({
           type: 'error',
           text:
@@ -442,7 +679,7 @@ export default function AdminNotificationsPage() {
         setMessage({
           type: 'info',
           text:
-            'This is a live manual payment alert. Open the MoMo verification page to manage it.',
+            'This is a live MoMo payment alert. Open the MoMo Reviews page to manage it.',
         });
         return;
       }
@@ -461,7 +698,7 @@ export default function AdminNotificationsPage() {
         }),
       });
 
-      const result = (await response.json()) as ApiResponse;
+      const result = await readApiJson(response);
 
       if (!response.ok || !result.success) {
         throw new Error(result.message || 'Could not mark notification as read.');
@@ -504,7 +741,7 @@ export default function AdminNotificationsPage() {
         }),
       });
 
-      const result = (await response.json()) as ApiResponse;
+      const result = await readApiJson(response);
 
       if (!response.ok || !result.success) {
         throw new Error(result.message || 'Could not mark all notifications as read.');
@@ -512,7 +749,7 @@ export default function AdminNotificationsPage() {
 
       setMessage({
         type: 'success',
-        text: result.message || 'All notifications marked as read.',
+        text: result.message || 'All database notifications marked as read.',
       });
 
       await fetchNotifications(1, activeFilter, searchTerm);
@@ -530,31 +767,23 @@ export default function AdminNotificationsPage() {
   };
 
   return (
-    <div className="space-y-8">
-      <div className="rounded-3xl bg-gradient-to-r from-emerald-700 via-emerald-600 to-teal-600 p-6 text-white shadow-sm md:p-8">
-        <div className="flex flex-col justify-between gap-6 xl:flex-row xl:items-center">
-          <div className="max-w-3xl">
-            <p className="mb-3 inline-flex rounded-full bg-white/15 px-4 py-1 text-sm font-semibold">
-              Admin Action Center
-            </p>
+    <main className="min-h-screen bg-slate-50 px-4 py-5 md:px-8">
+      <div className="mx-auto max-w-7xl space-y-5">
+        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+          <Link
+            href="/admin"
+            className="inline-flex min-h-11 w-fit items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-100"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to Admin Control Center
+          </Link>
 
-            <h1 className="text-3xl font-black md:text-4xl">
-              Notifications and MoMo payment alerts
-            </h1>
-
-            <p className="mt-4 max-w-2xl text-sm leading-7 text-emerald-50 md:text-base">
-              Monitor admin notifications, manual MoMo payment submissions,
-              rejected payment records, approved payments, payout alerts, and
-              Fund Space updates from one place.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={() => fetchNotifications(pagination.page)}
               disabled={loading}
-              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-white/15 px-5 py-3 text-sm font-bold text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {loading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -568,402 +797,371 @@ export default function AdminNotificationsPage() {
               type="button"
               onClick={markAllAsRead}
               disabled={actionLoading}
-              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-4 text-sm font-black text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <CheckCheck className="h-4 w-4" />
               Mark Database Alerts Read
             </button>
           </div>
         </div>
-      </div>
 
-      {message && (
-        <div
-          className={`flex items-start gap-3 rounded-2xl border p-4 text-sm font-semibold ${
-            message.type === 'success'
-              ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
-              : message.type === 'info'
-                ? 'border-blue-100 bg-blue-50 text-blue-700'
-                : 'border-red-100 bg-red-50 text-red-700'
-          }`}
-        >
-          {message.type === 'success' ? (
-            <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
-          ) : message.type === 'info' ? (
-            <Info className="mt-0.5 h-5 w-5 shrink-0" />
-          ) : (
-            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
-          )}
-          <p>{message.text}</p>
-        </div>
-      )}
+        <section className="overflow-hidden rounded-[2rem] bg-gradient-to-br from-emerald-950 via-emerald-900 to-emerald-800 text-white shadow-sm">
+          <div className="p-5 md:p-8">
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0">
+                <p className="inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-2 text-xs font-black">
+                  <Bell className="h-4 w-4" />
+                  Admin Action Center
+                </p>
 
-      <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Awaiting MoMo Review"
-          value={stats.awaiting_review}
-          description="Payment references waiting for admin confirmation"
-          icon={<Clock className="h-5 w-5" />}
-          href={buildFilterUrl('AWAITING_REVIEW')}
-          tone="amber"
-        />
+                <h1 className="mt-5 break-words text-3xl font-black tracking-tight md:text-5xl">
+                  Notifications & MoMo Payment Alerts
+                </h1>
 
-        <StatCard
-          title="Manual MoMo Alerts"
-          value={stats.manual_payment}
-          description="All manual payment system alerts"
-          icon={<Smartphone className="h-5 w-5" />}
-          href={buildFilterUrl('MANUAL_PAYMENT')}
-          tone="emerald"
-        />
+                <p className="mt-4 max-w-3xl break-words text-sm font-semibold leading-7 text-emerald-50 md:text-base">
+                  Monitor admin notifications, MoMo payment submissions, rejected
+                  payment records, approved payments, payout alerts, verification
+                  alerts, and Fund Space updates from one place.
+                </p>
+              </div>
 
-        <StatCard
-          title="Rejected MoMo"
-          value={stats.rejected_payment}
-          description="Rejected submissions needing visibility"
-          icon={<XCircle className="h-5 w-5" />}
-          href={buildFilterUrl('REJECTED_PAYMENT')}
-          tone="red"
-        />
-
-        <StatCard
-          title="Unread"
-          value={stats.unread}
-          description="Unread database notifications"
-          icon={<Bell className="h-5 w-5" />}
-          href={buildFilterUrl('UNREAD')}
-          tone="blue"
-        />
-
-        <StatCard
-          title="Approved MoMo"
-          value={stats.approved_payment}
-          description="Confirmed payment records"
-          icon={<CheckCircle2 className="h-5 w-5" />}
-          href={buildFilterUrl('APPROVED_PAYMENT')}
-          tone="emerald"
-        />
-
-        <StatCard
-          title="Payout Alerts"
-          value={stats.payout}
-          description="Payout related admin notifications"
-          icon={<HandCoins className="h-5 w-5" />}
-          href={buildFilterUrl('PAYOUT')}
-          tone="indigo"
-        />
-
-        <StatCard
-          title="Verifications"
-          value={stats.verification}
-          description="Customer and account verification alerts"
-          icon={<ShieldCheck className="h-5 w-5" />}
-          href={buildFilterUrl('VERIFICATION')}
-          tone="blue"
-        />
-
-        <StatCard
-          title="Fund Space"
-          value={stats.fund_space}
-          description="Round, contribution, and group alerts"
-          icon={<Users className="h-5 w-5" />}
-          href={buildFilterUrl('FUND_SPACE')}
-          tone="gray"
-        />
-      </section>
-
-      <section className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div className="relative w-full xl:max-w-md">
-            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-            <input
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  submitSearch();
-                }
-              }}
-              placeholder="Search customer, phone, reference, Fund Space..."
-              className="w-full rounded-2xl border border-gray-200 bg-gray-50 py-3 pl-11 pr-4 text-sm outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-50"
-            />
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            {filters.map((filter) => (
-              <button
-                key={filter.value}
-                type="button"
-                onClick={() => updateFilter(filter.value)}
-                className={`rounded-xl px-4 py-2.5 text-sm font-black transition ${
-                  activeFilter === filter.value
-                    ? 'bg-emerald-600 text-white shadow-sm hover:bg-emerald-700'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                {filter.label}{' '}
-                <span className="ml-1 opacity-75">
-                  {stats[filter.statKey] || 0}
-                </span>
-              </button>
-            ))}
-
-            <button
-              type="button"
-              onClick={submitSearch}
-              className="rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-black text-gray-700 transition hover:bg-gray-50"
-            >
-              Search
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm md:p-6">
-        {loading ? (
-          <div className="flex min-h-[300px] flex-col items-center justify-center gap-3 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50">
-              <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
-            </div>
-            <p className="text-sm font-semibold text-gray-500">
-              Loading admin notifications...
-            </p>
-          </div>
-        ) : notifications.length === 0 ? (
-          <div className="flex min-h-[300px] flex-col items-center justify-center gap-3 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-gray-50">
-              <Bell className="h-8 w-8 text-gray-400" />
-            </div>
-            <h2 className="text-lg font-black text-gray-900">
-              No notifications found
-            </h2>
-            <p className="max-w-md text-sm leading-6 text-gray-500">
-              Try another filter or search term. New MoMo submissions awaiting
-              admin verification will appear here automatically.
-            </p>
-          </div>
-        ) : (
-          <div className="divide-y divide-gray-100">
-            {notifications.map((notification) => {
-              const style = getNotificationStyle(notification);
-              const priorityStyle = getPriorityStyle(notification.priority);
-              const isManualPayment =
-                notification.source === 'MANUAL_PAYMENT_SYSTEM';
-
-              return (
-                <div
-                  key={notification.id}
-                  className="py-5 first:pt-0 last:pb-0"
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  href="/admin/manual-payment-submissions"
+                  className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-white/25 bg-white/10 px-4 text-xs font-black text-white ring-1 ring-white/10 transition hover:bg-white/20"
                 >
-                  <div
-                    className={`rounded-3xl border p-5 transition hover:shadow-sm ${style}`}
-                  >
-                    <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-                      <div className="flex min-w-0 flex-1 gap-4">
-                        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/80 shadow-sm">
-                          {getNotificationIcon(notification)}
-                        </div>
+                  MoMo Reviews
+                </Link>
 
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="text-lg font-black text-gray-900">
-                              {notification.title}
-                            </h3>
+                <Link
+                  href="/admin/fund-space/payouts"
+                  className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-white/25 bg-white/10 px-4 text-xs font-black text-white ring-1 ring-white/10 transition hover:bg-white/20"
+                >
+                  Payouts
+                </Link>
 
-                            {!notification.is_read && (
-                              <span className="rounded-full bg-emerald-600 px-2.5 py-1 text-xs font-black text-white">
-                                New
-                              </span>
-                            )}
+                <Link
+                  href="/admin/verifications"
+                  className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-white/25 bg-white/10 px-4 text-xs font-black text-white ring-1 ring-white/10 transition hover:bg-white/20"
+                >
+                  Verifications
+                </Link>
+              </div>
+            </div>
+          </div>
+        </section>
 
-                            <span
-                              className={`rounded-full border px-2.5 py-1 text-xs font-black ${priorityStyle}`}
-                            >
-                              {formatLabel(notification.priority)} Priority
-                            </span>
+        {message && <MessageBox message={message} />}
 
-                            <span className="rounded-full border border-gray-100 bg-white px-2.5 py-1 text-xs font-black text-gray-600">
-                              {formatLabel(notification.category)}
-                            </span>
+        <section className="grid auto-rows-fr gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {statCards.map((item) => (
+            <StatCard key={item.title} item={item} />
+          ))}
+        </section>
 
-                            {isManualPayment && (
-                              <span className="rounded-full border border-emerald-100 bg-white px-2.5 py-1 text-xs font-black text-emerald-700">
-                                Live MoMo Alert
-                              </span>
-                            )}
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+            <div className="relative w-full xl:max-w-md">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
+              <input
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    submitSearch();
+                  }
+                }}
+                placeholder="Search customer, phone, reference, Fund Space..."
+                className="min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-sm font-semibold outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
+              />
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {filters.map((filter) => (
+                <button
+                  key={filter.value}
+                  type="button"
+                  onClick={() => updateFilter(filter.value)}
+                  className={`min-h-10 rounded-2xl px-4 text-sm font-black transition ${
+                    activeFilter === filter.value
+                      ? 'bg-emerald-700 text-white shadow-sm hover:bg-emerald-800'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <span className="break-words">{filter.label}</span>{' '}
+                  <span className="ml-1 opacity-75">
+                    {stats[filter.statKey] || 0}
+                  </span>
+                </button>
+              ))}
+
+              <button
+                type="button"
+                onClick={submitSearch}
+                className="min-h-10 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+              >
+                Search
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+          {loading ? (
+            <div className="flex min-h-[300px] flex-col items-center justify-center gap-3 text-center">
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50">
+                <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+              </div>
+
+              <p className="text-sm font-semibold text-slate-500">
+                Loading admin notifications...
+              </p>
+            </div>
+          ) : notifications.length === 0 ? (
+            <div className="flex min-h-[300px] flex-col items-center justify-center gap-3 text-center">
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-slate-50">
+                <Bell className="h-8 w-8 text-slate-400" />
+              </div>
+
+              <h2 className="text-lg font-black text-slate-900">
+                No notifications found
+              </h2>
+
+              <p className="max-w-md text-sm leading-6 text-slate-500">
+                Try another filter or search term. New MoMo payment alerts
+                awaiting admin review will appear here automatically.
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {notifications.map((notification) => {
+                const style = getNotificationStyle(notification);
+                const priorityStyle = getPriorityStyle(notification.priority);
+                const isMoMoPayment =
+                  notification.source === 'MANUAL_PAYMENT_SYSTEM';
+
+                return (
+                  <div key={notification.id} className="py-5 first:pt-0 last:pb-0">
+                    <article
+                      className={`rounded-3xl border p-5 transition hover:shadow-sm ${style}`}
+                    >
+                      <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+                        <div className="flex min-w-0 flex-1 gap-4">
+                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/80 shadow-sm">
+                            {getNotificationIcon(notification)}
                           </div>
 
-                          <p className="mt-2 text-sm leading-6 text-gray-700">
-                            {notification.message}
-                          </p>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="break-words text-lg font-black text-slate-900 [overflow-wrap:anywhere]">
+                                {getNotificationTitle(notification)}
+                              </h3>
 
-                          {isManualPayment && (
-                            <div className="mt-4 grid gap-3 rounded-2xl bg-white/70 p-4 text-sm text-gray-700 md:grid-cols-2 xl:grid-cols-4">
-                              <div>
-                                <p className="text-xs font-bold uppercase text-gray-400">
-                                  Customer
-                                </p>
-                                <p className="mt-1 font-black">
-                                  {notification.customer_name || 'Unknown'}
-                                </p>
-                                <p className="text-xs text-gray-500">
-                                  {notification.customer_phone || 'No phone'}
-                                </p>
-                              </div>
+                              {!notification.is_read && (
+                                <span className="rounded-full bg-emerald-600 px-2.5 py-1 text-xs font-black text-white">
+                                  New
+                                </span>
+                              )}
 
-                              <div>
-                                <p className="text-xs font-bold uppercase text-gray-400">
-                                  Fund Space
-                                </p>
-                                <p className="mt-1 font-black">
-                                  {notification.fund_space_name || 'Not set'}
-                                </p>
-                                <p className="text-xs text-gray-500">
-                                  Agent:{' '}
-                                  {notification.agent_name || 'Not assigned'}
-                                </p>
-                              </div>
-
-                              <div>
-                                <p className="text-xs font-bold uppercase text-gray-400">
-                                  Amount Submitted
-                                </p>
-                                <p className="mt-1 font-black">
-                                  {formatMoney(notification.total_amount_paid)}
-                                </p>
-                                <p className="text-xs text-gray-500">
-                                  Due: {formatMoney(notification.amount_due)} ·
-                                  Fee: {formatMoney(notification.service_fee)}
-                                </p>
-                              </div>
-
-                              <div>
-                                <p className="text-xs font-bold uppercase text-gray-400">
-                                  Reference
-                                </p>
-                                <p className="mt-1 font-black">
-                                  {notification.transaction_reference ||
-                                    'Not provided'}
-                                </p>
-                                <p className="text-xs text-gray-500">
-                                  Status:{' '}
-                                  {formatLabel(
-                                    notification.manual_payment_status
-                                  )}
-                                </p>
-                              </div>
-                            </div>
-                          )}
-
-                          {notification.rejection_reason && (
-                            <div className="mt-4 rounded-2xl border border-red-100 bg-white/70 p-4 text-sm text-red-700">
-                              <p className="font-black">Rejection reason</p>
-                              <p className="mt-1 leading-6">
-                                {notification.rejection_reason}
-                              </p>
-                            </div>
-                          )}
-
-                          <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-gray-500">
-                            <span>{formatDateTime(notification.created_at)}</span>
-
-                            <span>
-                              Source:{' '}
-                              {notification.source === 'DATABASE'
-                                ? 'Database notification'
-                                : 'Manual payment system'}
-                            </span>
-
-                            {notification.related_entity_id && (
-                              <span className="rounded-full bg-white px-2 py-1 font-semibold">
-                                Ref:{' '}
-                                {notification.related_entity_id.slice(0, 8)}...
+                              <span
+                                className={`rounded-full border px-2.5 py-1 text-xs font-black ${priorityStyle}`}
+                              >
+                                {formatLabel(notification.priority)} Priority
                               </span>
+
+                              <span className="rounded-full border border-slate-100 bg-white px-2.5 py-1 text-xs font-black text-slate-600">
+                                {getNotificationCategoryLabel(
+                                  notification.category
+                                )}
+                              </span>
+
+                              {isMoMoPayment && (
+                                <span className="rounded-full border border-emerald-100 bg-white px-2.5 py-1 text-xs font-black text-emerald-700">
+                                  Live MoMo Alert
+                                </span>
+                              )}
+                            </div>
+
+                            <p className="mt-2 break-words text-sm leading-6 text-slate-700 [overflow-wrap:anywhere]">
+                              {getNotificationMessage(notification)}
+                            </p>
+
+                            {isMoMoPayment && (
+                              <div className="mt-4 grid gap-3 rounded-2xl bg-white/70 p-4 text-sm text-slate-700 md:grid-cols-2 xl:grid-cols-4">
+                                <MiniInfo
+                                  label="Customer"
+                                  value={
+                                    <>
+                                      <span>{notification.customer_name || 'Unknown'}</span>
+                                      <span className="mt-1 block text-xs font-semibold text-slate-500">
+                                        {notification.customer_phone || 'No phone'}
+                                      </span>
+                                    </>
+                                  }
+                                />
+
+                                <MiniInfo
+                                  label="Fund Space"
+                                  value={
+                                    <>
+                                      <span>
+                                        {notification.fund_space_name || 'Not set'}
+                                      </span>
+                                      <span className="mt-1 block text-xs font-semibold text-slate-500">
+                                        Agent:{' '}
+                                        {notification.agent_name || 'Not assigned'}
+                                      </span>
+                                    </>
+                                  }
+                                />
+
+                                <MiniInfo
+                                  label="Amount Submitted"
+                                  value={
+                                    <>
+                                      <span>
+                                        {formatMoney(
+                                          notification.total_amount_paid
+                                        )}
+                                      </span>
+                                      <span className="mt-1 block text-xs font-semibold text-slate-500">
+                                        Due: {formatMoney(notification.amount_due)} •
+                                        Fee: {formatMoney(notification.service_fee)}
+                                      </span>
+                                    </>
+                                  }
+                                />
+
+                                <MiniInfo
+                                  label="Reference"
+                                  value={
+                                    <>
+                                      <span>
+                                        {notification.transaction_reference ||
+                                          'Not provided'}
+                                      </span>
+                                      <span className="mt-1 block text-xs font-semibold text-slate-500">
+                                        Status:{' '}
+                                        {formatLabel(
+                                          notification.manual_payment_status
+                                        )}
+                                      </span>
+                                    </>
+                                  }
+                                />
+                              </div>
                             )}
+
+                            {notification.rejection_reason && (
+                              <div className="mt-4 rounded-2xl border border-red-100 bg-white/70 p-4 text-sm text-red-700">
+                                <p className="font-black">Rejection reason</p>
+                                <p className="mt-1 break-words leading-6 [overflow-wrap:anywhere]">
+                                  {notification.rejection_reason}
+                                </p>
+                              </div>
+                            )}
+
+                            <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                              <span>{formatDateTime(notification.created_at)}</span>
+
+                              <span>
+                                Source: {getNotificationSourceLabel(notification.source)}
+                              </span>
+
+                              {notification.related_entity_id && (
+                                <span className="rounded-full bg-white px-2 py-1 font-semibold">
+                                  Ref: {notification.related_entity_id.slice(0, 8)}
+                                  ...
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      <div className="flex shrink-0 flex-wrap gap-2 xl:justify-end">
-                        {!notification.is_read &&
-                          notification.source === 'DATABASE' && (
-                            <button
-                              type="button"
-                              onClick={() => markOneAsRead(notification)}
-                              disabled={actionLoading}
-                              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-black text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        <div className="flex shrink-0 flex-wrap gap-2 xl:justify-end">
+                          {!notification.is_read &&
+                            notification.source === 'DATABASE' && (
+                              <button
+                                type="button"
+                                onClick={() => markOneAsRead(notification)}
+                                disabled={actionLoading}
+                                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                <Eye className="h-4 w-4" />
+                                Mark Read
+                              </button>
+                            )}
+
+                          {isMoMoPayment && (
+                            <Link
+                              href="/admin/manual-payment-submissions"
+                              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 hover:bg-slate-50"
                             >
-                              <Eye className="h-4 w-4" />
-                              Mark Read
-                            </button>
+                              <FileCheck2 className="h-4 w-4" />
+                              MoMo Reviews
+                            </Link>
                           )}
 
-                        {isManualPayment && (
                           <Link
-                            href="/admin/manual-payment-submissions"
-                            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-black text-gray-700 hover:bg-gray-50"
+                            href={notification.action_href}
+                            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-4 py-2 text-sm font-black text-white hover:bg-emerald-800"
                           >
-                            <FileCheck2 className="h-4 w-4" />
-                            MoMo Page
+                            <span className="break-words [overflow-wrap:anywhere]">
+                              {getActionLabel(notification.action_label)}
+                            </span>
+                            <ArrowRight className="h-4 w-4 shrink-0" />
                           </Link>
-                        )}
-
-                        <Link
-                          href={notification.action_href}
-                          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-black text-white hover:bg-emerald-700"
-                        >
-                          {notification.action_label}
-                          <ArrowRight className="h-4 w-4" />
-                        </Link>
+                        </div>
                       </div>
-                    </div>
+                    </article>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
+          )}
+
+          <div className="mt-6 flex flex-col items-center justify-between gap-3 border-t border-slate-100 pt-5 sm:flex-row">
+            <p className="break-words text-sm text-slate-500">
+              Showing page {pagination.page} of {pagination.totalPages || 1} •{' '}
+              {pagination.total} total alert
+              {pagination.total === 1 ? '' : 's'}
+            </p>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={pagination.page <= 1 || loading}
+                onClick={() =>
+                  fetchNotifications(
+                    pagination.page - 1,
+                    activeFilter,
+                    searchTerm
+                  )
+                }
+                className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-black text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Previous
+              </button>
+
+              <button
+                type="button"
+                disabled={pagination.page >= pagination.totalPages || loading}
+                onClick={() =>
+                  fetchNotifications(
+                    pagination.page + 1,
+                    activeFilter,
+                    searchTerm
+                  )
+                }
+                className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-black text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
           </div>
-        )}
-
-        <div className="mt-6 flex flex-col items-center justify-between gap-3 border-t border-gray-100 pt-5 sm:flex-row">
-          <p className="text-sm text-gray-500">
-            Showing page {pagination.page} of {pagination.totalPages || 1} ·{' '}
-            {pagination.total} total alert
-            {pagination.total === 1 ? '' : 's'}
-          </p>
-
-          <div className="flex gap-2">
-            <button
-              type="button"
-              disabled={pagination.page <= 1 || loading}
-              onClick={() =>
-                fetchNotifications(
-                  pagination.page - 1,
-                  activeFilter,
-                  searchTerm
-                )
-              }
-              className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-black text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Previous
-            </button>
-
-            <button
-              type="button"
-              disabled={pagination.page >= pagination.totalPages || loading}
-              onClick={() =>
-                fetchNotifications(
-                  pagination.page + 1,
-                  activeFilter,
-                  searchTerm
-                )
-              }
-              className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-black text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Next
-            </button>
-          </div>
-        </div>
-      </section>
-    </div>
+        </section>
+      </div>
+    </main>
   );
 }

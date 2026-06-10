@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-import type { Database } from '@/lib/database.types';
-
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
@@ -10,19 +8,21 @@ type PayerType = 'CUSTOMER_SELF' | 'THIRD_PARTY' | 'AGENT_ASSISTED';
 
 type ManualPaymentSubmissionBody = {
   contribution_id?: string;
+  amount_due?: number | string;
+  service_fee?: number | string;
   total_amount_paid?: number | string;
   transaction_reference?: string;
   sender_name?: string;
   sender_phone?: string;
   sender_network?: string;
-  company_payment_account_id?: string;
+  company_payment_account_id?: string | null;
   payer_type?: string;
   payer_relationship?: string;
   payment_note?: string;
   screenshot_url?: string;
+  actual_payment_date?: string;
+  actual_payment_time?: string;
 };
-
-type ProfileRole = 'USER' | 'AGENT' | 'ADMIN' | 'SUPER_ADMIN' | string;
 
 type ContributionRow = {
   id: string;
@@ -47,14 +47,28 @@ function getSupabaseUrl() {
   return supabaseUrl;
 }
 
-function createUserClient(accessToken: string) {
+function getAnonKey() {
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!anonKey) {
     throw new Error('NEXT_PUBLIC_SUPABASE_ANON_KEY is not configured.');
   }
 
-  return createClient<Database>(getSupabaseUrl(), anonKey, {
+  return anonKey;
+}
+
+function getServiceRoleKey() {
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!serviceRoleKey) {
+    throw new Error('SUPABASE_SERVICE_ROLE_KEY is not configured.');
+  }
+
+  return serviceRoleKey;
+}
+
+function createUserClient(accessToken: string) {
+  return createClient(getSupabaseUrl(), getAnonKey(), {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
@@ -68,13 +82,7 @@ function createUserClient(accessToken: string) {
 }
 
 function createServiceClient() {
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!serviceRoleKey) {
-    throw new Error('SUPABASE_SERVICE_ROLE_KEY is not configured.');
-  }
-
-  return createClient<Database>(getSupabaseUrl(), serviceRoleKey, {
+  return createClient(getSupabaseUrl(), getServiceRoleKey(), {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
@@ -93,7 +101,7 @@ function errorResponse(message: string, status = 400) {
 }
 
 function normalizeText(value: string | null | undefined) {
-  return value?.trim() || null;
+  return String(value || '').trim() || null;
 }
 
 function normalizeNumber(value: number | string | null | undefined) {
@@ -105,7 +113,7 @@ function normalizeNumber(value: number | string | null | undefined) {
   return amount;
 }
 
-function normalizeRole(role: ProfileRole | null | undefined) {
+function normalizeRole(role: string | null | undefined) {
   return String(role || '').trim().toUpperCase().replaceAll('-', '_');
 }
 
@@ -155,7 +163,7 @@ function normalizePayerRelationship({
   }
 
   if (payerType === 'AGENT_ASSISTED') {
-    return relationship || 'Agent';
+    return relationship || 'Agent assisted payment';
   }
 
   return relationship || null;
@@ -165,15 +173,27 @@ function buildPaymentNote({
   payerType,
   payerRelationship,
   paymentNote,
+  actualPaymentDate,
+  actualPaymentTime,
 }: {
   payerType: PayerType;
   payerRelationship: string | null;
   paymentNote: string | null;
+  actualPaymentDate: string | null;
+  actualPaymentTime: string | null;
 }) {
   const parts = [
     `Payer Type: ${payerType}`,
     `Payer Relationship: ${payerRelationship || 'Not provided'}`,
   ];
+
+  if (actualPaymentDate || actualPaymentTime) {
+    parts.push(
+      `Actual Payment Date/Time: ${actualPaymentDate || 'Not provided'} ${
+        actualPaymentTime || ''
+      }`.trim()
+    );
+  }
 
   if (paymentNote) {
     parts.push(`Note: ${paymentNote}`);
@@ -197,17 +217,34 @@ async function getAccessToken(request: NextRequest) {
 function isPayableContributionStatus(status: string | null | undefined) {
   const value = String(status || '').toUpperCase();
 
-  return ['PENDING', 'DUE', 'OVERDUE', 'UNPAID', 'PARTIAL'].includes(value);
-}
-
-function isAdminRole(role: string) {
-  return role === 'ADMIN' || role === 'SUPER_ADMIN';
+  return [
+    'PENDING',
+    'DUE',
+    'OVERDUE',
+    'UNPAID',
+    'PARTIAL',
+    'PARTIALLY_PAID',
+    'LATE',
+    'MISSED',
+  ].includes(value);
 }
 
 function isActiveAgentCustomerRelationship(status: string | null | undefined) {
   const value = String(status || '').toUpperCase();
 
   return ['ACTIVE', 'APPROVED', 'VERIFIED'].includes(value);
+}
+
+function isValidDateInput(value: string | null | undefined) {
+  if (!value) return false;
+
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function isValidTimeInput(value: string | null | undefined) {
+  if (!value) return false;
+
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 }
 
 async function guardAgainstDuplicatePendingSubmission({
@@ -228,6 +265,7 @@ async function guardAgainstDuplicatePendingSubmission({
 
   if (pendingError) {
     console.error('Pending MoMo submission lookup error:', pendingError);
+
     throw new Error(
       'Unable to check existing payment submissions. Please try again.'
     );
@@ -251,6 +289,7 @@ async function guardAgainstDuplicatePendingSubmission({
 
   if (referenceError) {
     console.error('Transaction reference lookup error:', referenceError);
+
     throw new Error('Unable to check transaction reference. Please try again.');
   }
 
@@ -278,22 +317,30 @@ export async function POST(request: NextRequest) {
       return errorResponse('Unauthorized request. Please log in again.', 401);
     }
 
-    const body = (await request.json()) as ManualPaymentSubmissionBody;
+    const body = (await request.json().catch(() => null)) as
+      | ManualPaymentSubmissionBody
+      | null;
+
+    if (!body) {
+      return errorResponse('Invalid request body.', 400);
+    }
 
     const contributionId = normalizeText(body.contribution_id);
     const transactionReference = normalizeText(body.transaction_reference);
     const totalAmountPaid = normalizeNumber(body.total_amount_paid);
+    const submittedAmountDue = normalizeNumber(body.amount_due);
+    const submittedServiceFee = normalizeNumber(body.service_fee);
+
+    const actualPaymentDate = normalizeText(body.actual_payment_date);
+    const actualPaymentTime = normalizeText(body.actual_payment_time);
+
     const payerType = normalizePayerType(body.payer_type);
     const payerRelationship = normalizePayerRelationship({
       payerType,
       payerRelationship: body.payer_relationship,
     });
+
     const cleanPaymentNote = normalizeText(body.payment_note);
-    const enhancedPaymentNote = buildPaymentNote({
-      payerType,
-      payerRelationship,
-      paymentNote: cleanPaymentNote,
-    });
 
     if (!contributionId) {
       return errorResponse('Contribution ID is required.');
@@ -307,11 +354,27 @@ export async function POST(request: NextRequest) {
       return errorResponse('Total amount paid must be greater than zero.');
     }
 
+    if (!actualPaymentDate || !isValidDateInput(actualPaymentDate)) {
+      return errorResponse('Please provide a valid actual payment date.');
+    }
+
+    if (!actualPaymentTime || !isValidTimeInput(actualPaymentTime)) {
+      return errorResponse('Please provide a valid actual payment time.');
+    }
+
     if (payerType !== 'CUSTOMER_SELF' && !payerRelationship) {
       return errorResponse(
         'Please provide the relationship of the person who made this payment.'
       );
     }
+
+    const enhancedPaymentNote = buildPaymentNote({
+      payerType,
+      payerRelationship,
+      paymentNote: cleanPaymentNote,
+      actualPaymentDate,
+      actualPaymentTime,
+    });
 
     const userSupabase = createUserClient(accessToken);
     const serviceSupabase = createServiceClient();
@@ -342,15 +405,15 @@ export async function POST(request: NextRequest) {
 
     const role = normalizeRole(profile.role);
 
-    if (!['USER', 'AGENT', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+    if (!['USER', 'MEMBER', 'AGENT', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
       return errorResponse('Your account role cannot submit this payment.', 403);
     }
 
-    if (profile.status !== 'ACTIVE') {
+    if (String(profile.status || '').toUpperCase() !== 'ACTIVE') {
       return errorResponse('Your account is not active.', 403);
     }
 
-    if (profile.verification_status !== 'VERIFIED') {
+    if (String(profile.verification_status || '').toUpperCase() !== 'VERIFIED') {
       return errorResponse(
         'Your account must be verified before submitting payment.',
         403
@@ -360,12 +423,17 @@ export async function POST(request: NextRequest) {
     const { data: contributionData, error: contributionError } =
       await serviceSupabase
         .from('fund_space_contributions')
-        .select('id, fund_space_id, round_id, user_id, amount_due, amount_paid, status')
+        .select(
+          'id, fund_space_id, round_id, user_id, amount_due, amount_paid, status'
+        )
         .eq('id', contributionId)
         .maybeSingle();
 
     if (contributionError) {
-      console.error('Manual payment contribution lookup error:', contributionError);
+      console.error(
+        'Manual payment contribution lookup error:',
+        contributionError
+      );
       return errorResponse('Unable to load contribution record.', 500);
     }
 
@@ -376,7 +444,7 @@ export async function POST(request: NextRequest) {
     const contribution = contributionData as ContributionRow;
     const isOwnContribution = contribution.user_id === user.id;
 
-    if (role === 'USER' && !isOwnContribution) {
+    if ((role === 'USER' || role === 'MEMBER') && !isOwnContribution) {
       return errorResponse(
         'You can only submit payment for your own contribution.',
         403
@@ -424,7 +492,10 @@ export async function POST(request: NextRequest) {
         .maybeSingle();
 
     if (ownerProfileError) {
-      console.error('Contribution owner profile lookup error:', ownerProfileError);
+      console.error(
+        'Contribution owner profile lookup error:',
+        ownerProfileError
+      );
       return errorResponse('Unable to load contribution owner profile.', 500);
     }
 
@@ -432,11 +503,14 @@ export async function POST(request: NextRequest) {
       return errorResponse('Contribution owner profile was not found.', 404);
     }
 
-    if (contributionOwnerProfile.status !== 'ACTIVE') {
+    if (String(contributionOwnerProfile.status || '').toUpperCase() !== 'ACTIVE') {
       return errorResponse('The contribution owner account is not active.', 403);
     }
 
-    if (contributionOwnerProfile.verification_status !== 'VERIFIED') {
+    if (
+      String(contributionOwnerProfile.verification_status || '').toUpperCase() !==
+      'VERIFIED'
+    ) {
       return errorResponse(
         'The contribution owner must be verified before payment can be submitted.',
         403
@@ -449,7 +523,9 @@ export async function POST(request: NextRequest) {
       }
 
       return errorResponse(
-        `This contribution cannot be paid because its current status is ${contribution.status || 'UNKNOWN'}.`,
+        `This contribution cannot be paid because its current status is ${
+          contribution.status || 'UNKNOWN'
+        }.`,
         409
       );
     }
@@ -472,35 +548,60 @@ export async function POST(request: NextRequest) {
 
     const normalizedSenderNetwork = normalizeSenderNetwork(body.sender_network);
 
-    /*
-      This is the important fix:
-      We insert using the service client after validating ownership ourselves.
-      We do not call submit_manual_fund_space_payment here because that RPC is
-      still rejecting agent self-contributions as if they were unassigned customers.
-    */
-    const insertPayload = {
+    const insertPayload: Record<string, unknown> = {
       contribution_id: contribution.id,
       fund_space_id: contribution.fund_space_id,
       round_id: contribution.round_id,
       user_id: contribution.user_id,
       agent_id: role === 'AGENT' && !isOwnContribution ? user.id : null,
-      status: 'PENDING_REVIEW',
-      transaction_reference: transactionReference,
+
+      company_payment_account_id: normalizeText(body.company_payment_account_id),
+
+      amount_due: submittedAmountDue > 0 ? submittedAmountDue : amountDue,
+      service_fee: submittedServiceFee,
       total_amount_paid: totalAmountPaid,
+
       sender_name: normalizeText(body.sender_name),
       sender_phone: normalizeText(body.sender_phone),
       sender_network: normalizedSenderNetwork,
-      company_payment_account_id: normalizeText(body.company_payment_account_id),
+
+      transaction_reference: transactionReference,
       payment_note: enhancedPaymentNote || null,
       screenshot_url: normalizeText(body.screenshot_url),
+
+      submitted_by: user.id,
+      submitted_by_role: role,
+
+      status: 'PENDING_REVIEW',
+
       payer_type: payerType,
       payer_relationship: payerRelationship,
+
+      actual_payment_date: actualPaymentDate,
+      actual_payment_time: actualPaymentTime,
+      actual_payment_source: 'USER_PROVIDED',
     };
 
     const { data: submission, error: insertError } = await serviceSupabase
       .from('manual_payment_submissions')
-      .insert(insertPayload as never)
-      .select('id, contribution_id, fund_space_id, user_id, agent_id, status, transaction_reference, total_amount_paid, created_at')
+      .insert(insertPayload)
+      .select(
+        `
+        id,
+        contribution_id,
+        fund_space_id,
+        user_id,
+        agent_id,
+        status,
+        transaction_reference,
+        total_amount_paid,
+        actual_payment_date,
+        actual_payment_time,
+        actual_payment_at,
+        actual_payment_source,
+        created_at
+      `
+      )
       .single();
 
     if (insertError) {
@@ -512,59 +613,67 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    await serviceSupabase.rpc('create_deduped_notification', {
+    const submissionId = String(submission?.id || '');
+
+    if (!submissionId) {
+      return errorResponse(
+        'Payment submission was created but no submission ID was returned.',
+        500
+      );
+    }
+
+    const rpcClient = serviceSupabase as any;
+
+    await rpcClient.rpc('create_deduped_notification', {
       p_user_id: contribution.user_id,
       p_title: 'MoMo payment submitted',
       p_message:
         'Your MoMo payment reference has been submitted successfully and is awaiting admin verification.',
       p_type: 'INFO',
       p_related_entity_type: 'manual_payment_submissions',
-      p_related_entity_id: submission.id,
-      p_dedupe_key: `manual_payment_submitted:${submission.id}:customer`,
+      p_related_entity_id: submissionId,
+      p_dedupe_key: `manual_payment_submitted:${submissionId}:customer`,
     });
 
     if (role === 'AGENT' && !isOwnContribution) {
-      await serviceSupabase.rpc('create_deduped_notification', {
+      await rpcClient.rpc('create_deduped_notification', {
         p_user_id: user.id,
         p_title: 'Customer MoMo payment submitted',
         p_message:
           'You submitted a customer MoMo payment reference successfully. It is awaiting admin verification.',
         p_type: 'INFO',
         p_related_entity_type: 'manual_payment_submissions',
-        p_related_entity_id: submission.id,
-        p_dedupe_key: `manual_payment_submitted:${submission.id}:agent`,
+        p_related_entity_id: submissionId,
+        p_dedupe_key: `manual_payment_submitted:${submissionId}:agent`,
       });
     }
 
-    const { data: admins } = await serviceSupabase
+    const { data: admins, error: adminsError } = await serviceSupabase
       .from('profiles')
       .select('id')
-      .in('role', ['ADMIN', 'SUPER_ADMIN']);
+      .in('role', ['ADMIN', 'SUPER_ADMIN'])
+      .eq('status', 'ACTIVE');
+
+    if (adminsError) {
+      console.error('Admin lookup for manual payment notification warning:', adminsError);
+    }
 
     if (admins && admins.length > 0) {
-      const adminNotifications = admins.map((admin) => ({
-        user_id: admin.id,
-        title: 'New MoMo payment needs verification',
-        message: `${
-          contributionOwnerProfile.full_name || 'A Fund Space member'
-        } submitted a MoMo payment reference for admin verification.`,
-        type: 'MOMO_VERIFICATION_REQUIRED',
-        related_entity_type: 'manual_payment_submissions',
-        related_entity_id: submission.id,
-        dedupe_key: `manual_payment_submitted:${submission.id}:admin:${admin.id}`,
-        is_read: false,
-      }));
-
-      const { error: adminNotificationError } = await serviceSupabase
-        .from('notifications')
-        .insert(adminNotifications as never);
-
-      if (adminNotificationError) {
-        console.error(
-          'Admin manual payment notification warning:',
-          adminNotificationError
-        );
-      }
+      await Promise.all(
+        admins.map((admin) =>
+          rpcClient.rpc('create_deduped_notification', {
+            p_user_id: admin.id,
+            p_title: 'New MoMo payment needs verification',
+            p_message: `${
+              contributionOwnerProfile.full_name || 'A Fund Space member'
+            } submitted a MoMo payment reference for admin verification.`,
+            p_type: 'INFO',
+            p_related_entity_type: 'manual_payment_submissions',
+            p_related_entity_id: submissionId,
+            p_dedupe_key: `manual_payment_submitted:${submissionId}:admin:${admin.id}`,
+          })
+        )
+      );
     }
 
     return NextResponse.json({

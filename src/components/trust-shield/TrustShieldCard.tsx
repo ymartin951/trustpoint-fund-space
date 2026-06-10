@@ -7,9 +7,10 @@ import {
   CheckCircle2,
   Clock,
   Loader2,
-  ShieldCheck,
   ShieldAlert,
+  ShieldCheck,
   Star,
+  Trophy,
   UserRoundCheck,
   UsersRound,
   XCircle,
@@ -92,39 +93,90 @@ function formatLabel(value: string | null | undefined) {
 }
 
 function getTrustColor(score: number) {
-  if (score >= 85) return 'text-emerald-700 bg-emerald-50 border-emerald-100';
-  if (score >= 70) return 'text-blue-700 bg-blue-50 border-blue-100';
-  if (score >= 55) return 'text-amber-700 bg-amber-50 border-amber-100';
-  if (score >= 25) return 'text-orange-700 bg-orange-50 border-orange-100';
+  if (score >= 85) {
+    return {
+      card: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+      bar: 'bg-emerald-600',
+      soft: 'bg-emerald-100 text-emerald-700',
+    };
+  }
 
-  return 'text-red-700 bg-red-50 border-red-100';
+  if (score >= 70) {
+    return {
+      card: 'border-blue-200 bg-blue-50 text-blue-700',
+      bar: 'bg-blue-600',
+      soft: 'bg-blue-100 text-blue-700',
+    };
+  }
+
+  if (score >= 55) {
+    return {
+      card: 'border-amber-200 bg-amber-50 text-amber-700',
+      bar: 'bg-amber-500',
+      soft: 'bg-amber-100 text-amber-700',
+    };
+  }
+
+  if (score >= 25) {
+    return {
+      card: 'border-orange-200 bg-orange-50 text-orange-700',
+      bar: 'bg-orange-500',
+      soft: 'bg-orange-100 text-orange-700',
+    };
+  }
+
+  return {
+    card: 'border-red-200 bg-red-50 text-red-700',
+    bar: 'bg-red-600',
+    soft: 'bg-red-100 text-red-700',
+  };
 }
 
 function getRiskStyle(risk: string | null | undefined) {
   const value = String(risk || '').toUpperCase();
 
-  if (value === 'LOW') return 'border-emerald-100 bg-emerald-50 text-emerald-700';
-  if (value === 'MEDIUM') return 'border-amber-100 bg-amber-50 text-amber-700';
+  if (value === 'LOW') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  if (value === 'MEDIUM') return 'border-amber-200 bg-amber-50 text-amber-700';
 
-  return 'border-red-100 bg-red-50 text-red-700';
+  return 'border-red-200 bg-red-50 text-red-700';
 }
 
 function MetricBox({
   label,
   value,
   helper,
+  icon,
 }: {
   label: string;
   value: string | number;
   helper?: string;
+  icon?: React.ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-      <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
-        {label}
-      </p>
-      <p className="mt-2 text-xl font-black text-slate-900">{value}</p>
-      {helper && <p className="mt-1 text-xs leading-5 text-slate-500">{helper}</p>}
+    <div className="min-w-0 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[11px] font-black uppercase leading-4 tracking-wide text-slate-400">
+            {label}
+          </p>
+
+          <p className="mt-2 break-words text-2xl font-black leading-tight text-slate-900">
+            {value}
+          </p>
+        </div>
+
+        {icon && (
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
+            {icon}
+          </div>
+        )}
+      </div>
+
+      {helper && (
+        <p className="mt-2 break-words text-xs font-semibold leading-5 text-slate-500">
+          {helper}
+        </p>
+      )}
     </div>
   );
 }
@@ -139,16 +191,59 @@ function CheckItem({
   helper?: string;
 }) {
   return (
-    <div className="flex items-start gap-3 rounded-2xl bg-slate-50 p-4">
-      {checked ? (
-        <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
-      ) : (
-        <XCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
-      )}
+    <div className="min-w-0 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+      <div className="flex items-start gap-3">
+        {checked ? (
+          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+        ) : (
+          <XCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
+        )}
 
-      <div>
-        <p className="text-sm font-black text-slate-900">{label}</p>
-        {helper && <p className="mt-1 text-xs leading-5 text-slate-500">{helper}</p>}
+        <div className="min-w-0">
+          <p className="break-words text-sm font-black leading-5 text-slate-900">
+            {label}
+          </p>
+
+          {helper && (
+            <p className="mt-1 break-words text-xs font-semibold leading-5 text-slate-500">
+              {helper}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ScoreCard({
+  score,
+  level,
+}: {
+  score: number;
+  level: string;
+}) {
+  const scoreStyle = getTrustColor(score);
+  const safeScore = Math.max(0, Math.min(Number(score || 0), 100));
+
+  return (
+    <div className={`rounded-3xl border p-5 shadow-sm ${scoreStyle.card}`}>
+      <p className="text-center text-xs font-black uppercase tracking-wide">
+        Trust Score
+      </p>
+
+      <p className="mt-3 text-center text-5xl font-black leading-none md:text-6xl">
+        {safeScore}%
+      </p>
+
+      <p className="mt-3 text-center text-sm font-black leading-5">
+        {level || 'Not rated yet'}
+      </p>
+
+      <div className="mt-5 h-3 overflow-hidden rounded-full bg-white/80">
+        <div
+          className={`h-full rounded-full ${scoreStyle.bar}`}
+          style={{ width: `${safeScore}%` }}
+        />
       </div>
     </div>
   );
@@ -218,8 +313,7 @@ export default function TrustShieldCard({
   }, [loadTrustShield]);
 
   const score = Number(trustShield?.trust_score || 0);
-
-  const scoreStyle = useMemo(() => getTrustColor(score), [score]);
+  const scoreColor = useMemo(() => getTrustColor(score), [score]);
 
   if (loading) {
     return (
@@ -237,161 +331,245 @@ export default function TrustShieldCard({
       <div className="rounded-3xl border border-red-100 bg-red-50 p-6">
         <div className="flex items-start gap-3">
           <ShieldAlert className="mt-1 h-5 w-5 shrink-0 text-red-600" />
-          <div>
-            <h2 className="text-lg font-black text-red-800">
+
+          <div className="min-w-0">
+            <h2 className="text-lg font-black text-red-700">
               Trust Shield unavailable
             </h2>
-            <p className="mt-2 text-sm leading-6 text-red-700">{errorMessage}</p>
+
+            <p className="mt-2 break-words text-sm font-semibold leading-6 text-red-600">
+              {errorMessage}
+            </p>
           </div>
         </div>
       </div>
     );
   }
 
-  if (!trustShield) return null;
+  if (!trustShield) {
+    return (
+      <div className="rounded-3xl border border-slate-100 bg-white p-6 text-center shadow-sm">
+        <ShieldCheck className="mx-auto h-10 w-10 text-slate-300" />
+
+        <h2 className="mt-4 text-lg font-black text-slate-900">
+          No Trust Shield profile found
+        </h2>
+
+        <p className="mt-2 text-sm leading-6 text-slate-500">
+          This member does not have enough activity yet.
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <section className="rounded-3xl border border-emerald-100 bg-white p-5 shadow-sm md:p-6">
-      <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0">
-          <p className="mb-2 inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">
-            <ShieldCheck className="h-4 w-4" />
-            TrustPoint Safety Profile
+    <section className="overflow-hidden rounded-3xl border border-emerald-100 bg-white shadow-sm">
+      <div className="border-b border-slate-100 bg-gradient-to-br from-emerald-50 via-white to-white p-5 md:p-6">
+        <div className="grid gap-5 lg:grid-cols-[1fr_260px] lg:items-center">
+          <div className="min-w-0">
+            <p className="inline-flex max-w-full items-center gap-2 rounded-full bg-emerald-100 px-4 py-2 text-xs font-black text-emerald-700">
+              <ShieldCheck className="h-4 w-4 shrink-0" />
+              <span className="truncate">TrustPoint Safety Profile</span>
+            </p>
+
+            <h2 className="mt-4 break-words text-2xl font-black leading-tight text-slate-950 md:text-3xl">
+              {title}
+            </h2>
+
+            <p className="mt-3 max-w-2xl break-words text-sm font-semibold leading-7 text-slate-600">
+              {subtitle}
+            </p>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <span
+                className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${getRiskStyle(
+                  trustShield.default_risk_level
+                )}`}
+              >
+                Risk: {formatLabel(trustShield.default_risk_level)}
+              </span>
+
+              <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${scoreColor.soft}`}>
+                {formatLabel(trustShield.trust_level_label)}
+              </span>
+
+              <span className="inline-flex rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-black text-slate-600">
+                Joined Spaces: {trustShield.total_fund_spaces_joined || 0}
+              </span>
+            </div>
+          </div>
+
+          <ScoreCard
+            score={score}
+            level={trustShield.trust_level_label}
+          />
+        </div>
+      </div>
+
+      <div className="space-y-5 p-5 md:p-6">
+        <div>
+          <h3 className="text-base font-black text-slate-900">
+            Contribution Performance
+          </h3>
+
+          <p className="mt-1 text-sm leading-6 text-slate-500">
+            These numbers help TrustPoint understand how reliable this member is
+            in weekly contribution groups.
           </p>
 
-          <h2 className="text-2xl font-black text-slate-900">{title}</h2>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricBox
+              label="Risk Level"
+              value={formatLabel(trustShield.default_risk_level)}
+              helper="Used later for payout risk checks."
+              icon={<AlertTriangle className="h-4 w-4" />}
+            />
 
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-            {subtitle}
+            <MetricBox
+              label="Successful Payments"
+              value={trustShield.successful_weekly_payments || 0}
+              helper="Confirmed weekly contributions."
+              icon={<CheckCircle2 className="h-4 w-4" />}
+            />
+
+            <MetricBox
+              label="Missed Payments"
+              value={trustShield.missed_payments || 0}
+              helper="Missed or defaulted contributions."
+              icon={<XCircle className="h-4 w-4" />}
+            />
+
+            <MetricBox
+              label="Late Payments"
+              value={trustShield.late_payments || 0}
+              helper="Paid after the contribution deadline."
+              icon={<Clock className="h-4 w-4" />}
+            />
+          </div>
+        </div>
+
+        <div>
+          <h3 className="text-base font-black text-slate-900">
+            Safety Requirements
+          </h3>
+
+          <p className="mt-1 text-sm leading-6 text-slate-500">
+            These checks help protect the group before payouts are released.
           </p>
-        </div>
 
-        <div
-          className={`rounded-3xl border p-5 text-center shadow-sm ${scoreStyle}`}
-        >
-          <p className="text-xs font-black uppercase tracking-wide">Trust Score</p>
-          <p className="mt-1 text-5xl font-black">{score}%</p>
-          <p className="mt-2 text-sm font-black">{trustShield.trust_level_label}</p>
-        </div>
-      </div>
+          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <CheckItem
+              checked={String(trustShield.verification_status || '').toUpperCase() === 'VERIFIED'}
+              label="Identity Verified"
+              helper={`Verification status: ${formatLabel(
+                trustShield.verification_status
+              )}`}
+            />
 
-      <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricBox
-          label="Risk Level"
-          value={formatLabel(trustShield.default_risk_level)}
-          helper="Used later for payout risk checks."
-        />
+            <CheckItem
+              checked={trustShield.has_accepted_current_agreement}
+              label="Agreement Accepted"
+              helper={
+                trustShield.latest_agreement_accepted_at
+                  ? `Accepted on ${formatDate(trustShield.latest_agreement_accepted_at)}`
+                  : 'Current agreement not accepted yet.'
+              }
+            />
 
-        <MetricBox
-          label="Successful Payments"
-          value={trustShield.successful_weekly_payments}
-          helper="Confirmed weekly contributions."
-        />
+            <CheckItem
+              checked={trustShield.has_approved_guarantor}
+              label="Guarantor Approved"
+              helper={
+                trustShield.has_approved_guarantor
+                  ? 'Approved guarantor is available.'
+                  : 'No approved guarantor found.'
+              }
+            />
 
-        <MetricBox
-          label="Missed Payments"
-          value={trustShield.missed_payments}
-          helper="Missed or defaulted contributions."
-        />
+            <CheckItem
+              checked={trustShield.has_emergency_contact}
+              label="Emergency Contact"
+              helper={
+                trustShield.has_emergency_contact
+                  ? 'Emergency contact is available.'
+                  : 'Emergency contact is missing.'
+              }
+            />
 
-        <MetricBox
-          label="Late Payments"
-          value={trustShield.late_payments}
-          helper="Paid after contribution deadline."
-        />
-      </div>
+            <CheckItem
+              checked={trustShield.default_cases <= 0}
+              label="Default Record"
+              helper={
+                trustShield.default_cases > 0
+                  ? `${trustShield.default_cases} default case(s) found.`
+                  : 'No default case recorded.'
+              }
+            />
 
-      <div className="mt-5 grid gap-4 lg:grid-cols-3">
-        <CheckItem
-          checked={String(trustShield.verification_status || '').toUpperCase() === 'VERIFIED'}
-          label="Identity verified"
-          helper={`Current status: ${formatLabel(trustShield.verification_status)}`}
-        />
-
-        <CheckItem
-          checked={trustShield.has_accepted_current_agreement}
-          label="Agreement accepted"
-          helper={
-            trustShield.latest_agreement_accepted_at
-              ? `Accepted on ${formatDate(trustShield.latest_agreement_accepted_at)}`
-              : 'Agreement has not been accepted yet.'
-          }
-        />
-
-        <CheckItem
-          checked={trustShield.has_approved_guarantor}
-          label="Guarantor approved"
-          helper="Coming in Step 3 for higher-value Fund Spaces."
-        />
-      </div>
-
-      <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricBox
-          label="Completed Cycles"
-          value={trustShield.completed_fund_space_cycles}
-        />
-
-        <MetricBox
-          label="Successful Payouts"
-          value={trustShield.successful_payouts}
-        />
-
-        <MetricBox
-          label="Total Paid"
-          value={formatCurrency(trustShield.total_amount_paid)}
-        />
-
-        <MetricBox
-          label="Payout Received"
-          value={formatCurrency(trustShield.total_payout_received)}
-        />
-      </div>
-
-      <div className="mt-5 rounded-2xl border border-slate-100 bg-slate-50 p-4">
-        <div className="flex items-start gap-3">
-          <UsersRound className="mt-1 h-5 w-5 shrink-0 text-slate-500" />
-          <div>
-            <p className="text-sm font-black text-slate-900">
-              Registered Agent
-            </p>
-
-            {trustShield.registered_agent_name ? (
-              <p className="mt-1 text-sm leading-6 text-slate-600">
-                {trustShield.registered_agent_name}
-                {trustShield.registered_agent_phone
-                  ? ` • ${trustShield.registered_agent_phone}`
-                  : ''}
-              </p>
-            ) : (
-              <p className="mt-1 text-sm leading-6 text-slate-500">
-                No registered agent found for this member.
-              </p>
-            )}
+            <CheckItem
+              checked={trustShield.successful_payouts >= 0}
+              label="Payout History"
+              helper={`${trustShield.successful_payouts || 0} successful payout(s) recorded.`}
+            />
           </div>
         </div>
-      </div>
 
-      <div className={`mt-5 rounded-2xl border p-4 ${getRiskStyle(trustShield.default_risk_level)}`}>
-        <div className="flex items-start gap-3">
-          {trustShield.default_risk_level === 'LOW' ? (
-            <BadgeCheck className="mt-1 h-5 w-5 shrink-0" />
-          ) : trustShield.default_risk_level === 'MEDIUM' ? (
-            <AlertTriangle className="mt-1 h-5 w-5 shrink-0" />
-          ) : (
-            <ShieldAlert className="mt-1 h-5 w-5 shrink-0" />
-          )}
+        <div>
+          <h3 className="text-base font-black text-slate-900">
+            Financial Summary
+          </h3>
 
-          <div>
-            <p className="text-sm font-black">
-              Default Risk: {formatLabel(trustShield.default_risk_level)}
-            </p>
-            <p className="mt-1 text-sm leading-6">
-              This rating is calculated from verification, agreement status,
-              payment history, missed payments, late payments, completed cycles,
-              and default cases.
-            </p>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricBox
+              label="Total Amount Due"
+              value={formatCurrency(trustShield.total_amount_due)}
+              helper="Total expected contribution amount."
+              icon={<UsersRound className="h-4 w-4" />}
+            />
+
+            <MetricBox
+              label="Total Amount Paid"
+              value={formatCurrency(trustShield.total_amount_paid)}
+              helper="Total contribution amount paid."
+              icon={<BadgeCheck className="h-4 w-4" />}
+            />
+
+            <MetricBox
+              label="Payouts Received"
+              value={trustShield.successful_payouts || 0}
+              helper="Number of successful payouts."
+              icon={<Trophy className="h-4 w-4" />}
+            />
+
+            <MetricBox
+              label="Total Payout Received"
+              value={formatCurrency(trustShield.total_payout_received)}
+              helper="Total amount received as payout."
+              icon={<Star className="h-4 w-4" />}
+            />
           </div>
         </div>
+
+        {trustShield.registered_agent_name && (
+          <div className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+            <div className="flex items-start gap-3">
+              <UserRoundCheck className="mt-1 h-5 w-5 shrink-0 text-emerald-700" />
+
+              <div className="min-w-0">
+                <p className="text-sm font-black text-slate-900">
+                  Registered Agent
+                </p>
+
+                <p className="mt-1 break-words text-sm font-semibold leading-6 text-slate-600">
+                  {trustShield.registered_agent_name}
+                  {trustShield.registered_agent_phone
+                    ? ` · ${trustShield.registered_agent_phone}`
+                    : ''}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </section>
   );

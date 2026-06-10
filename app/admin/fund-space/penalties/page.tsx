@@ -545,7 +545,7 @@ export default function AdminFundSpacePenaltiesPage() {
 
               <div className="mt-5">
                 <Link
-                  href="/admin/fund-space"
+                  href="/admin"
                   className="inline-flex min-h-11 items-center gap-2 rounded-2xl bg-white px-4 text-sm font-black text-emerald-700 hover:bg-emerald-50"
                 >
                   <ArrowLeft className="h-4 w-4" />

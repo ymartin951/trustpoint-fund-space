@@ -1,15 +1,19 @@
-"use client";
+'use client';
 
-import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import type { FormEvent, ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { useParams, useRouter } from 'next/navigation';
 import {
   AlertCircle,
   ArrowLeft,
+  ArrowRight,
   BadgeCheck,
   Banknote,
   BriefcaseBusiness,
   CalendarDays,
   CheckCircle2,
+  CircleDollarSign,
   Clock,
   Eye,
   FileText,
@@ -21,15 +25,20 @@ import {
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
+  Smartphone,
   Upload,
   User,
+  UserPlus,
   UserRound,
+  Wallet,
   X,
   XCircle,
-} from "lucide-react";
+} from 'lucide-react';
 
-import TrustShieldCard from "@/components/trust-shield/TrustShieldCard";
-import { supabase } from "../../../../src/lib/supabase/client";
+import TrustShieldCard from '@/components/trust-shield/TrustShieldCard';
+import { supabase } from '@/lib/supabase/client';
+
+const contributionAmounts = [50, 100, 200, 500];
 
 type Customer = {
   id: string;
@@ -134,92 +143,162 @@ type TrustShieldApiResponse = {
   trust_shield?: TrustShieldSummary;
 };
 
+type FundSpaceCustomer = {
+  id: string;
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+  status: string;
+  verification_status: string;
+  is_blacklisted: boolean;
+  can_add_to_fund_space: boolean;
+  eligibility_reason: string;
+  fund_space_member: {
+    id: string;
+    fund_space_id: string;
+    contribution_amount: number;
+    status: string;
+    joined_at: string | null;
+    joined_by_agent: string | null;
+    position_number: number | null;
+    payout_order: number | null;
+  } | null;
+  fund_space: {
+    id: string;
+    name: string;
+    contribution_amount: number;
+    status: string;
+    member_limit: number;
+    current_round_number: number;
+  } | null;
+};
+
+type FundSpaceCustomersResponse = {
+  success: boolean;
+  message?: string;
+  customers?: FundSpaceCustomer[];
+};
+
+type JoinFundSpaceResponse = {
+  success: boolean;
+  message?: string;
+};
+
 function formatValue(value?: string | number | boolean | null) {
-  if (value === null || value === undefined || value === "") {
-    return "Not provided";
+  if (value === null || value === undefined || value === '') {
+    return 'Not provided';
   }
 
-  if (typeof value === "boolean") {
-    return value ? "Yes" : "No";
+  if (typeof value === 'boolean') {
+    return value ? 'Yes' : 'No';
   }
 
   return String(value);
 }
 
+function formatCurrency(amount: number | null | undefined) {
+  return `GH₵${Number(amount || 0).toLocaleString('en-GH', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
 function formatDate(value?: string | null) {
-  if (!value) return "Not provided";
+  if (!value) return 'Not provided';
 
   const date = new Date(value);
 
   if (Number.isNaN(date.getTime())) return value;
 
-  return date.toLocaleDateString("en-GH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
+  return date.toLocaleDateString('en-GH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
   });
 }
 
 function formatDateTime(value?: string | null) {
-  if (!value) return "Not provided";
+  if (!value) return 'Not provided';
 
   const date = new Date(value);
 
   if (Number.isNaN(date.getTime())) return value;
 
-  return date.toLocaleString("en-GH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
+  return date.toLocaleString('en-GH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
   });
 }
 
 function prettyLabel(value?: string | null) {
-  if (!value) return "Not provided";
+  if (!value) return 'Not provided';
 
   return value
-    .replaceAll("_", " ")
+    .replaceAll('_', ' ')
     .toLowerCase()
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function normalizeStatus(value?: string | null) {
+  return String(value || '').toUpperCase();
+}
+
 function statusBadgeClass(status?: string | null) {
-  switch (status) {
-    case "VERIFIED":
-    case "ACTIVE":
-    case "APPROVED":
-      return "bg-emerald-50 text-emerald-700 border-emerald-200";
+  const value = normalizeStatus(status);
 
-    case "PENDING":
-    case "UNVERIFIED":
-      return "bg-amber-50 text-amber-700 border-amber-200";
-
-    case "REJECTED":
-    case "SUSPENDED":
-    case "BLACKLISTED":
-    case "INACTIVE":
-      return "bg-red-50 text-red-700 border-red-200";
-
-    case "TRANSFERRED":
-      return "bg-purple-50 text-purple-700 border-purple-200";
-
-    default:
-      return "bg-slate-50 text-slate-700 border-slate-200";
+  if (['VERIFIED', 'ACTIVE', 'APPROVED', 'COMPLETED', 'PAID'].includes(value)) {
+    return 'bg-emerald-50 text-emerald-700 border-emerald-200';
   }
+
+  if (
+    ['PENDING', 'UNVERIFIED', 'FORMING', 'PENDING_REVIEW', 'COLLECTING'].includes(
+      value
+    )
+  ) {
+    return 'bg-amber-50 text-amber-700 border-amber-200';
+  }
+
+  if (
+    [
+      'REJECTED',
+      'SUSPENDED',
+      'BLACKLISTED',
+      'INACTIVE',
+      'REMOVED',
+      'DEFAULTED',
+      'CANCELLED',
+    ].includes(value)
+  ) {
+    return 'bg-red-50 text-red-700 border-red-200';
+  }
+
+  if (value === 'TRANSFERRED') {
+    return 'bg-purple-50 text-purple-700 border-purple-200';
+  }
+
+  return 'bg-slate-50 text-slate-700 border-slate-200';
 }
 
 function statusIcon(status?: string | null) {
-  if (status === "VERIFIED" || status === "ACTIVE" || status === "APPROVED") {
+  const value = normalizeStatus(status);
+
+  if (['VERIFIED', 'ACTIVE', 'APPROVED', 'COMPLETED', 'PAID'].includes(value)) {
     return <CheckCircle2 size={15} />;
   }
 
   if (
-    status === "REJECTED" ||
-    status === "SUSPENDED" ||
-    status === "BLACKLISTED" ||
-    status === "INACTIVE"
+    [
+      'REJECTED',
+      'SUSPENDED',
+      'BLACKLISTED',
+      'INACTIVE',
+      'REMOVED',
+      'DEFAULTED',
+      'CANCELLED',
+    ].includes(value)
   ) {
     return <XCircle size={15} />;
   }
@@ -228,23 +307,49 @@ function statusIcon(status?: string | null) {
 }
 
 function trustScorePanelClass(score: number) {
-  if (score >= 85) {
-    return "border-emerald-200 bg-emerald-50 text-emerald-900";
-  }
+  if (score >= 85) return 'border-emerald-200 bg-emerald-50 text-emerald-900';
+  if (score >= 70) return 'border-teal-200 bg-teal-50 text-teal-900';
+  if (score >= 55) return 'border-amber-200 bg-amber-50 text-amber-900';
+  if (score >= 25) return 'border-orange-200 bg-orange-50 text-orange-900';
 
-  if (score >= 70) {
-    return "border-teal-200 bg-teal-50 text-teal-900";
-  }
+  return 'border-red-200 bg-red-50 text-red-900';
+}
 
-  if (score >= 55) {
-    return "border-amber-200 bg-amber-50 text-amber-900";
-  }
+function customerLocation(customer: Customer) {
+  return (
+    customer.location ||
+    customer.city ||
+    customer.region ||
+    customer.country ||
+    'Not provided'
+  );
+}
 
-  if (score >= 25) {
-    return "border-orange-200 bg-orange-50 text-orange-900";
-  }
+function customerWork(customer: Customer) {
+  return (
+    customer.business_name ||
+    customer.business_type ||
+    customer.occupation ||
+    customer.employer_name ||
+    'Not provided'
+  );
+}
 
-  return "border-red-200 bg-red-50 text-red-900";
+function isJoinedToFundSpace(status: FundSpaceCustomer | null) {
+  return Boolean(status?.fund_space_member || status?.fund_space);
+}
+
+function StatusBadge({ status }: { status?: string | null }) {
+  return (
+    <span
+      className={`inline-flex max-w-full items-center gap-1 rounded-full border px-3 py-1 text-xs font-black ${statusBadgeClass(
+        status
+      )}`}
+    >
+      {statusIcon(status)}
+      <span className="truncate">{prettyLabel(status)}</span>
+    </span>
+  );
 }
 
 function InfoItem({
@@ -254,16 +359,16 @@ function InfoItem({
 }: {
   label: string;
   value?: string | number | boolean | null;
-  icon?: React.ReactNode;
+  icon?: ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+    <div className="min-w-0 rounded-2xl border border-slate-200 bg-slate-50 p-4">
       <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-500">
         {icon}
-        {label}
+        <span className="break-words">{label}</span>
       </div>
 
-      <p className="break-words text-sm font-semibold text-slate-900">
+      <p className="break-words text-sm font-semibold leading-6 text-slate-900">
         {formatValue(value)}
       </p>
     </div>
@@ -276,8 +381,8 @@ function Section({
   children,
 }: {
   title: string;
-  icon: React.ReactNode;
-  children: React.ReactNode;
+  icon: ReactNode;
+  children: ReactNode;
 }) {
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
@@ -304,7 +409,7 @@ function DocumentCard({
     <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 p-4">
         <h3 className="text-sm font-black text-slate-900">{title}</h3>
-        <p className="mt-1 text-xs font-medium text-slate-500">
+        <p className="mt-1 text-xs font-medium leading-5 text-slate-500">
           {description}
         </p>
       </div>
@@ -328,7 +433,7 @@ function DocumentCard({
           <p className="text-sm font-bold text-slate-600">
             No image available
           </p>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-xs leading-5 text-slate-500">
             This document was not uploaded or the secure image link could not be
             created.
           </p>
@@ -365,19 +470,78 @@ export default function AgentCustomerDetailsPage() {
   }, [params]);
 
   const [loading, setLoading] = useState(true);
+  const [refreshingFundSpace, setRefreshingFundSpace] = useState(false);
   const [resubmitLoading, setResubmitLoading] = useState(false);
   const [trustShieldLoading, setTrustShieldLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState("");
-  const [successMessage, setSuccessMessage] = useState("");
+  const [addingToFundSpace, setAddingToFundSpace] = useState(false);
+
+  const [errorMessage, setErrorMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+
   const [data, setData] = useState<CustomerResponse | null>(null);
   const [trustShieldSummary, setTrustShieldSummary] =
     useState<TrustShieldSummary | null>(null);
+  const [fundSpaceStatus, setFundSpaceStatus] =
+    useState<FundSpaceCustomer | null>(null);
+  const [selectedContributionAmount, setSelectedContributionAmount] =
+    useState<number>(contributionAmounts[0]);
 
   const [resubmitModalOpen, setResubmitModalOpen] = useState(false);
-  const [resubmissionNote, setResubmissionNote] = useState("");
+  const [resubmissionNote, setResubmissionNote] = useState('');
   const [idFrontFile, setIdFrontFile] = useState<File | null>(null);
   const [idBackFile, setIdBackFile] = useState<File | null>(null);
   const [selfieFile, setSelfieFile] = useState<File | null>(null);
+
+  const customer = data?.customer;
+  const relationship = data?.relationship;
+  const documents = data?.documents;
+  const verificationRequest = data?.verification_request;
+  const reviewedByProfile = data?.reviewed_by_profile;
+
+  const currentTrustScore =
+    trustShieldSummary?.trust_score ?? customer?.trust_score ?? 0;
+
+  const currentTrustLevel =
+    trustShieldSummary?.trust_level_label || 'Trust Shield Score';
+
+  const currentDefaultRisk =
+    trustShieldSummary?.default_risk_level || 'Not available';
+
+  const isRejected =
+    normalizeStatus(customer?.verification_status) === 'REJECTED' ||
+    normalizeStatus(verificationRequest?.status) === 'REJECTED';
+
+  const isVerified =
+    normalizeStatus(customer?.verification_status) === 'VERIFIED' ||
+    normalizeStatus(verificationRequest?.status) === 'APPROVED';
+
+  const isPending =
+    normalizeStatus(customer?.verification_status) === 'PENDING' ||
+    normalizeStatus(verificationRequest?.status) === 'PENDING';
+
+  const joinedToFundSpace = isJoinedToFundSpace(fundSpaceStatus);
+
+  const canAddToFundSpace =
+    Boolean(fundSpaceStatus?.can_add_to_fund_space) && !joinedToFundSpace;
+
+  async function getAccessToken() {
+    const {
+      data: { session },
+      error,
+    } = await supabase.auth.getSession();
+
+    if (error) {
+      throw new Error(error.message || 'Could not check your login session.');
+    }
+
+    if (!session?.access_token) {
+      throw new Error(
+        'Your session has expired or you are not logged in. Please login again.'
+      );
+    }
+
+    return session.access_token;
+  }
 
   async function loadTrustShield(accessToken: string, targetUserId: string) {
     try {
@@ -386,7 +550,7 @@ export default function AgentCustomerDetailsPage() {
       const response = await fetch(
         `/api/trust-shield/profile?user_id=${encodeURIComponent(targetUserId)}`,
         {
-          method: "GET",
+          method: 'GET',
           headers: {
             Authorization: `Bearer ${accessToken}`,
           },
@@ -403,7 +567,7 @@ export default function AgentCustomerDetailsPage() {
       setTrustShieldSummary(result.trust_shield);
     } catch (error) {
       console.warn(
-        "Customer Trust Shield summary warning:",
+        'Customer Trust Shield summary warning:',
         error instanceof Error ? error.message : error
       );
       setTrustShieldSummary(null);
@@ -412,37 +576,65 @@ export default function AgentCustomerDetailsPage() {
     }
   }
 
-  async function loadCustomer() {
+  async function loadFundSpaceStatus(
+    accessToken: string,
+    targetCustomerId: string,
+    showRefresh = false
+  ) {
+    try {
+      if (showRefresh) setRefreshingFundSpace(true);
+
+      const response = await fetch('/api/agent/fund-space/customers', {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+
+      const result = (await response.json().catch(() => null)) as
+        | FundSpaceCustomersResponse
+        | null;
+
+      if (!response.ok || !result?.success) {
+        setFundSpaceStatus(null);
+        return;
+      }
+
+      const matchedCustomer =
+        result.customers?.find((item) => item.id === targetCustomerId) || null;
+
+      setFundSpaceStatus(matchedCustomer);
+
+      if (matchedCustomer?.fund_space?.contribution_amount) {
+        setSelectedContributionAmount(matchedCustomer.fund_space.contribution_amount);
+      }
+    } catch (error) {
+      console.warn(
+        'Customer Fund Space status warning:',
+        error instanceof Error ? error.message : error
+      );
+      setFundSpaceStatus(null);
+    } finally {
+      setRefreshingFundSpace(false);
+    }
+  }
+
+  const loadCustomer = useCallback(async () => {
     try {
       setLoading(true);
-      setErrorMessage("");
-      setSuccessMessage("");
+      setErrorMessage('');
+      setSuccessMessage('');
 
       if (!customerId) {
-        throw new Error("Customer ID is missing from the page URL.");
+        throw new Error('Customer ID is missing from the page URL.');
       }
 
-      const {
-        data: { session },
-        error: sessionError,
-      } = await supabase.auth.getSession();
-
-      if (sessionError) {
-        throw new Error(
-          sessionError.message || "Could not check your login session."
-        );
-      }
-
-      if (!session?.access_token) {
-        throw new Error(
-          "Your session has expired or you are not logged in. Please login again."
-        );
-      }
+      const accessToken = await getAccessToken();
 
       const response = await fetch(`/api/agent/customers/${customerId}`, {
-        method: "GET",
+        method: 'GET',
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${accessToken}`,
         },
       });
 
@@ -454,13 +646,13 @@ export default function AgentCustomerDetailsPage() {
         result = responseText ? JSON.parse(responseText) : {};
       } catch {
         throw new Error(
-          "The server returned an invalid response while loading customer details."
+          'The server returned an invalid response while loading customer details.'
         );
       }
 
       if (!response.ok || !result.success) {
         throw new Error(
-          result.message || "Could not load customer details. Please try again."
+          result.message || 'Could not load customer details. Please try again.'
         );
       }
 
@@ -468,31 +660,102 @@ export default function AgentCustomerDetailsPage() {
 
       setData(loadedData);
 
-      await loadTrustShield(session.access_token, loadedData.customer.id);
+      await Promise.all([
+        loadTrustShield(accessToken, loadedData.customer.id),
+        loadFundSpaceStatus(accessToken, loadedData.customer.id),
+      ]);
     } catch (error) {
-      const message =
+      setErrorMessage(
         error instanceof Error
           ? error.message
-          : "Something went wrong while loading customer details.";
-
-      setErrorMessage(message);
+          : 'Something went wrong while loading customer details.'
+      );
     } finally {
       setLoading(false);
     }
+  }, [customerId]);
+
+  async function refreshFundSpaceStatus() {
+    try {
+      setErrorMessage('');
+      setSuccessMessage('');
+
+      if (!customer?.id) return;
+
+      const accessToken = await getAccessToken();
+      await loadFundSpaceStatus(accessToken, customer.id, true);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : 'Could not refresh Fund Space status.'
+      );
+    }
   }
 
-  async function handleResubmitVerification(
-    event: React.FormEvent<HTMLFormElement>
-  ) {
+  async function handleAddToFundSpace() {
+    try {
+      setAddingToFundSpace(true);
+      setErrorMessage('');
+      setSuccessMessage('');
+
+      if (!customer?.id) {
+        throw new Error('Customer profile is not loaded.');
+      }
+
+      if (!selectedContributionAmount) {
+        throw new Error('Please select a weekly contribution amount.');
+      }
+
+      const accessToken = await getAccessToken();
+
+      const response = await fetch('/api/fund-space/join', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          customer_id: customer.id,
+          contribution_amount: selectedContributionAmount,
+        }),
+      });
+
+      const result = (await response.json().catch(() => null)) as
+        | JoinFundSpaceResponse
+        | null;
+
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.message || 'Could not add customer to Fund Space.');
+      }
+
+      setSuccessMessage(
+        result.message ||
+          `${customer.full_name} has been added to Fund Space successfully.`
+      );
+
+      await loadFundSpaceStatus(accessToken, customer.id, true);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : 'Something went wrong while adding customer to Fund Space.'
+      );
+    } finally {
+      setAddingToFundSpace(false);
+    }
+  }
+
+  async function handleResubmitVerification(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     try {
       setResubmitLoading(true);
-      setErrorMessage("");
-      setSuccessMessage("");
+      setErrorMessage('');
+      setSuccessMessage('');
 
       if (!customerId) {
-        throw new Error("Customer ID is missing from the page URL.");
+        throw new Error('Customer ID is missing from the page URL.');
       }
 
       if (
@@ -502,47 +765,24 @@ export default function AgentCustomerDetailsPage() {
         !resubmissionNote.trim()
       ) {
         throw new Error(
-          "Please upload at least one corrected document or add a resubmission note."
+          'Please upload at least one corrected document or add a resubmission note.'
         );
       }
 
-      const {
-        data: { session },
-        error: sessionError,
-      } = await supabase.auth.getSession();
-
-      if (sessionError) {
-        throw new Error(
-          sessionError.message || "Could not check your login session."
-        );
-      }
-
-      if (!session?.access_token) {
-        throw new Error(
-          "Your session has expired or you are not logged in. Please login again."
-        );
-      }
+      const accessToken = await getAccessToken();
 
       const formData = new FormData();
 
-      if (idFrontFile) {
-        formData.append("id_document_front", idFrontFile);
-      }
+      if (idFrontFile) formData.append('id_document_front', idFrontFile);
+      if (idBackFile) formData.append('id_document_back', idBackFile);
+      if (selfieFile) formData.append('selfie', selfieFile);
 
-      if (idBackFile) {
-        formData.append("id_document_back", idBackFile);
-      }
-
-      if (selfieFile) {
-        formData.append("selfie", selfieFile);
-      }
-
-      formData.append("resubmission_note", resubmissionNote.trim());
+      formData.append('resubmission_note', resubmissionNote.trim());
 
       const response = await fetch(`/api/agent/customers/${customerId}`, {
-        method: "PATCH",
+        method: 'PATCH',
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${accessToken}`,
         },
         body: formData,
       });
@@ -552,29 +792,28 @@ export default function AgentCustomerDetailsPage() {
 
       if (!response.ok || !result?.success) {
         throw new Error(
-          result?.message || "Could not resubmit verification request."
+          result?.message || 'Could not resubmit verification request.'
         );
       }
 
       setSuccessMessage(
         result.message ||
-          "Customer verification has been resubmitted successfully."
+          'Customer verification has been resubmitted successfully.'
       );
 
       setResubmitModalOpen(false);
-      setResubmissionNote("");
+      setResubmissionNote('');
       setIdFrontFile(null);
       setIdBackFile(null);
       setSelfieFile(null);
 
       await loadCustomer();
     } catch (error) {
-      const message =
+      setErrorMessage(
         error instanceof Error
           ? error.message
-          : "Something went wrong while resubmitting verification.";
-
-      setErrorMessage(message);
+          : 'Something went wrong while resubmitting verification.'
+      );
     } finally {
       setResubmitLoading(false);
     }
@@ -582,43 +821,15 @@ export default function AgentCustomerDetailsPage() {
 
   useEffect(() => {
     loadCustomer();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customerId]);
-
-  const customer = data?.customer;
-  const relationship = data?.relationship;
-  const documents = data?.documents;
-  const verificationRequest = data?.verification_request;
-  const reviewedByProfile = data?.reviewed_by_profile;
-
-  const currentTrustScore =
-    trustShieldSummary?.trust_score ?? customer?.trust_score ?? 0;
-
-  const currentTrustLevel =
-    trustShieldSummary?.trust_level_label || "Trust Shield Score";
-
-  const currentDefaultRisk =
-    trustShieldSummary?.default_risk_level || "Not available";
-
-  const isRejected =
-    customer?.verification_status === "REJECTED" ||
-    verificationRequest?.status === "REJECTED";
-
-  const isVerified =
-    customer?.verification_status === "VERIFIED" ||
-    verificationRequest?.status === "APPROVED";
-
-  const isPending =
-    customer?.verification_status === "PENDING" ||
-    verificationRequest?.status === "PENDING";
+  }, [loadCustomer]);
 
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-5 md:px-8 md:py-8">
-      <div className="mx-auto max-w-6xl">
+      <div className="mx-auto max-w-7xl">
         <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <button
             type="button"
-            onClick={() => router.push("/agent/customers")}
+            onClick={() => router.push('/agent/customers')}
             className="inline-flex min-h-11 w-fit items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100"
           >
             <ArrowLeft size={18} />
@@ -631,18 +842,16 @@ export default function AgentCustomerDetailsPage() {
             disabled={loading}
             className="inline-flex min-h-11 w-fit items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
             Refresh
           </button>
         </div>
 
         {successMessage && (
-          <div className="mb-5 rounded-3xl border border-emerald-200 bg-emerald-50 p-5 text-emerald-700 shadow-sm">
-            <div className="flex items-start gap-3">
-              <CheckCircle2 className="mt-0.5 shrink-0" size={22} />
-              <p className="text-sm font-bold leading-6">{successMessage}</p>
-            </div>
-          </div>
+          <AlertPanel type="success">
+            <CheckCircle2 className="mt-0.5 shrink-0" size={22} />
+            <p>{successMessage}</p>
+          </AlertPanel>
         )}
 
         {loading && (
@@ -659,117 +868,127 @@ export default function AgentCustomerDetailsPage() {
         )}
 
         {!loading && errorMessage && (
-          <div className="rounded-3xl border border-red-200 bg-red-50 p-5 text-red-700 shadow-sm">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="mt-0.5 shrink-0" size={22} />
+          <AlertPanel type="error">
+            <AlertCircle className="mt-0.5 shrink-0" size={22} />
 
-              <div>
-                <h2 className="font-black">Could not complete action</h2>
-                <p className="mt-1 text-sm font-semibold leading-6">
-                  {errorMessage}
-                </p>
+            <div>
+              <h2 className="font-black">Could not complete action</h2>
+              <p className="mt-1 text-sm font-semibold leading-6">
+                {errorMessage}
+              </p>
 
+              {errorMessage.toLowerCase().includes('session') ? (
+                <Link
+                  href="/auth/login"
+                  className="mt-4 inline-flex min-h-11 items-center justify-center rounded-2xl bg-red-700 px-4 text-sm font-bold text-white transition hover:bg-red-800"
+                >
+                  Go to Login
+                </Link>
+              ) : (
                 <button
                   type="button"
-                  onClick={() => router.push("/agent/customers")}
+                  onClick={() => router.push('/agent/customers')}
                   className="mt-4 inline-flex min-h-11 items-center justify-center rounded-2xl bg-red-700 px-4 text-sm font-bold text-white transition hover:bg-red-800"
                 >
                   Go Back to Customers
                 </button>
-              </div>
+              )}
             </div>
-          </div>
+          </AlertPanel>
         )}
 
         {!loading && customer && relationship && (
           <div className="space-y-5">
-            <section className="rounded-3xl bg-gradient-to-br from-emerald-800 via-emerald-700 to-teal-700 p-5 text-white shadow-lg md:p-8">
-              <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                  <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 text-xs font-bold">
-                    <UserRound size={14} />
-                    Customer Details
-                  </div>
-
-                  <h1 className="text-2xl font-black tracking-tight md:text-3xl">
-                    {customer.full_name || "Unnamed customer"}
-                  </h1>
-
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <span
-                      className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-black ${statusBadgeClass(
-                        customer.verification_status
-                      )}`}
-                    >
-                      {statusIcon(customer.verification_status)}
-                      {prettyLabel(customer.verification_status)}
-                    </span>
-
-                    <span
-                      className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-black ${statusBadgeClass(
-                        customer.status
-                      )}`}
-                    >
-                      {statusIcon(customer.status)}
-                      {prettyLabel(customer.status)}
-                    </span>
-
-                    <span
-                      className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-black ${statusBadgeClass(
-                        relationship.relationship_status
-                      )}`}
-                    >
-                      {statusIcon(relationship.relationship_status)}
-                      Agent Link: {prettyLabel(relationship.relationship_status)}
-                    </span>
-                  </div>
-
-                  <p className="mt-4 max-w-3xl text-sm leading-6 text-emerald-50">
-                    This page shows one selected customer only. Use the uploaded
-                    ID documents, selfie, and Trust Shield profile to understand
-                    the customer’s verification and reliability status.
-                  </p>
+            <section className="grid gap-5 xl:grid-cols-[1fr_420px]">
+              <div className="rounded-3xl bg-gradient-to-br from-emerald-800 via-emerald-700 to-teal-700 p-5 text-white shadow-lg md:p-8">
+                <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 text-xs font-bold">
+                  <UserRound size={14} />
+                  Agent Customer Profile
                 </div>
 
-                <div
-                  className={`grid gap-3 rounded-3xl border p-4 shadow-lg md:min-w-72 ${trustScorePanelClass(
-                    Number(currentTrustScore || 0)
-                  )}`}
-                >
-                  <div>
-                    <p className="text-xs font-black uppercase tracking-wide opacity-80">
-                      Current Trust Score
-                    </p>
+                <h1 className="break-words text-2xl font-black tracking-tight md:text-4xl">
+                  {customer.full_name || 'Unnamed customer'}
+                </h1>
 
-                    <div className="mt-1 flex items-end gap-1">
-                      <p className="text-4xl font-black leading-none">
-                        {trustShieldLoading ? "..." : currentTrustScore}
-                      </p>
-                      <span className="pb-1 text-sm font-black">%</span>
-                    </div>
+                <p className="mt-3 max-w-3xl text-sm leading-7 text-emerald-50">
+                  This page helps the agent understand the customer, verify
+                  documents, check Trust Shield, and continue to Fund Space
+                  payment collection when the customer is ready.
+                </p>
 
-                    <p className="mt-2 text-xs font-black">
-                      {trustShieldLoading ? "Loading Trust Shield..." : currentTrustLevel}
-                    </p>
+                <div className="mt-5 flex flex-wrap gap-2">
+                  <StatusBadge status={customer.verification_status} />
+                  <StatusBadge status={customer.status} />
+                  <StatusBadge status={relationship.relationship_status} />
+                  {customer.is_blacklisted && <StatusBadge status="BLACKLISTED" />}
+                </div>
 
-                    <p className="mt-1 text-xs font-semibold opacity-80">
-                      Risk: {prettyLabel(currentDefaultRisk)}
-                    </p>
-                  </div>
-
-                  <div className="h-px bg-black/10" />
-
-                  <div>
-                    <p className="text-xs font-black uppercase tracking-wide opacity-80">
-                      Registered On
-                    </p>
-                    <p className="mt-1 text-sm font-bold">
-                      {formatDateTime(customer.created_at)}
-                    </p>
-                  </div>
+                <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  <HeroMiniCard
+                    label="Phone"
+                    value={customer.phone || 'No phone'}
+                    helper="Primary contact"
+                  />
+                  <HeroMiniCard
+                    label="Location"
+                    value={customerLocation(customer)}
+                    helper="Customer area"
+                  />
+                  <HeroMiniCard
+                    label="Work / Business"
+                    value={customerWork(customer)}
+                    helper={prettyLabel(customer.user_category)}
+                  />
                 </div>
               </div>
+
+              <div
+                className={`rounded-3xl border p-5 shadow-sm ${trustScorePanelClass(
+                  Number(currentTrustScore || 0)
+                )}`}
+              >
+                <p className="text-xs font-black uppercase tracking-wide opacity-80">
+                  Current Trust Score
+                </p>
+
+                <div className="mt-2 flex items-end gap-1">
+                  <p className="text-5xl font-black leading-none">
+                    {trustShieldLoading ? '...' : currentTrustScore}
+                  </p>
+                  <span className="pb-1 text-sm font-black">%</span>
+                </div>
+
+                <p className="mt-3 text-sm font-black">
+                  {trustShieldLoading ? 'Loading Trust Shield...' : currentTrustLevel}
+                </p>
+
+                <p className="mt-1 text-xs font-semibold opacity-80">
+                  Risk: {prettyLabel(currentDefaultRisk)}
+                </p>
+
+                <div className="my-5 h-px bg-black/10" />
+
+                <p className="text-xs font-black uppercase tracking-wide opacity-80">
+                  Registered On
+                </p>
+                <p className="mt-1 text-sm font-bold">
+                  {formatDateTime(customer.created_at)}
+                </p>
+              </div>
             </section>
+
+            <FundSpaceActionCard
+              customer={customer}
+              fundSpaceStatus={fundSpaceStatus}
+              selectedContributionAmount={selectedContributionAmount}
+              onContributionAmountChange={setSelectedContributionAmount}
+              canAddToFundSpace={canAddToFundSpace}
+              joinedToFundSpace={joinedToFundSpace}
+              addingToFundSpace={addingToFundSpace}
+              refreshingFundSpace={refreshingFundSpace}
+              onAddToFundSpace={handleAddToFundSpace}
+              onRefreshFundSpace={refreshFundSpaceStatus}
+            />
 
             <TrustShieldCard
               userId={customer.id}
@@ -802,7 +1021,7 @@ export default function AgentCustomerDetailsPage() {
                         </p>
                         <p className="mt-2 whitespace-pre-wrap text-sm font-bold leading-6 text-red-800">
                           {verificationRequest?.rejection_reason ||
-                            "No rejection reason was provided."}
+                            'No rejection reason was provided.'}
                         </p>
                       </div>
 
@@ -846,7 +1065,7 @@ export default function AgentCustomerDetailsPage() {
                     </h2>
                     <p className="mt-2 text-sm font-semibold leading-6 text-emerald-700">
                       This customer has been verified and can now access verified
-                      customer features.
+                      customer features, including Fund Space if eligible.
                     </p>
                   </div>
                 </div>
@@ -1054,7 +1273,7 @@ export default function AgentCustomerDetailsPage() {
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <p className="whitespace-pre-wrap text-sm font-medium leading-6 text-slate-700">
                   {relationship.notes ||
-                    "No agent note was added for this customer."}
+                    'No agent note was added for this customer.'}
                 </p>
               </div>
             </Section>
@@ -1093,62 +1312,23 @@ export default function AgentCustomerDetailsPage() {
                 </p>
               </div>
 
-              <div>
-                <label className="text-sm font-bold text-slate-700">
-                  Corrected Front ID Image
-                </label>
-                <input
-                  type="file"
-                  accept="image/jpeg,image/jpg,image/png,image/webp"
-                  onChange={(event) =>
-                    setIdFrontFile(event.target.files?.[0] || null)
-                  }
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
-                />
-                {idFrontFile && (
-                  <p className="mt-1 text-xs font-semibold text-slate-500">
-                    Selected: {idFrontFile.name}
-                  </p>
-                )}
-              </div>
+              <FileInput
+                label="Corrected Front ID Image"
+                file={idFrontFile}
+                onChange={setIdFrontFile}
+              />
 
-              <div>
-                <label className="text-sm font-bold text-slate-700">
-                  Corrected Back ID Image
-                </label>
-                <input
-                  type="file"
-                  accept="image/jpeg,image/jpg,image/png,image/webp"
-                  onChange={(event) =>
-                    setIdBackFile(event.target.files?.[0] || null)
-                  }
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
-                />
-                {idBackFile && (
-                  <p className="mt-1 text-xs font-semibold text-slate-500">
-                    Selected: {idBackFile.name}
-                  </p>
-                )}
-              </div>
+              <FileInput
+                label="Corrected Back ID Image"
+                file={idBackFile}
+                onChange={setIdBackFile}
+              />
 
-              <div>
-                <label className="text-sm font-bold text-slate-700">
-                  Corrected Selfie / Passport Photo
-                </label>
-                <input
-                  type="file"
-                  accept="image/jpeg,image/jpg,image/png,image/webp"
-                  onChange={(event) =>
-                    setSelfieFile(event.target.files?.[0] || null)
-                  }
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
-                />
-                {selfieFile && (
-                  <p className="mt-1 text-xs font-semibold text-slate-500">
-                    Selected: {selfieFile.name}
-                  </p>
-                )}
-              </div>
+              <FileInput
+                label="Corrected Selfie / Passport Photo"
+                file={selfieFile}
+                onChange={setSelfieFile}
+              />
 
               <div>
                 <label className="text-sm font-bold text-slate-700">
@@ -1190,5 +1370,270 @@ export default function AgentCustomerDetailsPage() {
         </div>
       )}
     </main>
+  );
+}
+
+function AlertPanel({
+  type,
+  children,
+}: {
+  type: 'success' | 'error';
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={`mb-5 rounded-3xl border p-5 shadow-sm ${
+        type === 'success'
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          : 'border-red-200 bg-red-50 text-red-700'
+      }`}
+    >
+      <div className="flex items-start gap-3 text-sm font-bold leading-6">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function HeroMiniCard({
+  label,
+  value,
+  helper,
+}: {
+  label: string;
+  value: string;
+  helper: string;
+}) {
+  return (
+    <div className="min-w-0 rounded-2xl bg-white/15 p-4 backdrop-blur">
+      <p className="text-xs font-black uppercase tracking-wide text-emerald-50">
+        {label}
+      </p>
+      <p className="mt-1 break-words text-lg font-black text-white">{value}</p>
+      <p className="mt-1 break-words text-xs text-emerald-50">{helper}</p>
+    </div>
+  );
+}
+
+function FundSpaceActionCard({
+  customer,
+  fundSpaceStatus,
+  selectedContributionAmount,
+  onContributionAmountChange,
+  canAddToFundSpace,
+  joinedToFundSpace,
+  addingToFundSpace,
+  refreshingFundSpace,
+  onAddToFundSpace,
+  onRefreshFundSpace,
+}: {
+  customer: Customer;
+  fundSpaceStatus: FundSpaceCustomer | null;
+  selectedContributionAmount: number;
+  onContributionAmountChange: (amount: number) => void;
+  canAddToFundSpace: boolean;
+  joinedToFundSpace: boolean;
+  addingToFundSpace: boolean;
+  refreshingFundSpace: boolean;
+  onAddToFundSpace: () => void;
+  onRefreshFundSpace: () => void;
+}) {
+  return (
+    <section className="rounded-3xl border border-emerald-100 bg-white p-5 shadow-sm md:p-6">
+      <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
+        <div className="min-w-0">
+          <div className="flex items-start gap-3">
+            <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-700">
+              <Wallet size={24} />
+            </div>
+
+            <div className="min-w-0">
+              <h2 className="text-xl font-black text-slate-900">
+                Customer Fund Space Status
+              </h2>
+              <p className="mt-1 text-sm font-semibold leading-6 text-slate-500">
+                This section connects the customer profile to the Fund Space
+                payment workflow. Add the customer if eligible, or open the
+                payment page if already joined.
+              </p>
+            </div>
+          </div>
+
+          {joinedToFundSpace && fundSpaceStatus?.fund_space ? (
+            <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <InfoItem
+                label="Fund Space"
+                value={fundSpaceStatus.fund_space.name}
+                icon={<Wallet size={14} />}
+              />
+              <InfoItem
+                label="Weekly Amount"
+                value={formatCurrency(fundSpaceStatus.fund_space.contribution_amount)}
+                icon={<CircleDollarSign size={14} />}
+              />
+              <InfoItem
+                label="Group Status"
+                value={prettyLabel(fundSpaceStatus.fund_space.status)}
+                icon={<ShieldCheck size={14} />}
+              />
+              <InfoItem
+                label="Current Round"
+                value={`Round ${fundSpaceStatus.fund_space.current_round_number || 0}`}
+                icon={<Clock size={14} />}
+              />
+            </div>
+          ) : (
+            <div className="mt-5 rounded-3xl border border-amber-100 bg-amber-50 p-5 text-amber-800">
+              <p className="text-sm font-black">
+                Customer is not yet in a Fund Space group.
+              </p>
+              <p className="mt-2 text-sm font-semibold leading-6">
+                {fundSpaceStatus?.eligibility_reason ||
+                  'Use the action panel to add the customer if eligible.'}
+              </p>
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={onRefreshFundSpace}
+            disabled={refreshingFundSpace}
+            className="mt-5 inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {refreshingFundSpace ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <RefreshCw size={16} />
+            )}
+            Refresh Fund Space Status
+          </button>
+        </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+          {joinedToFundSpace ? (
+            <div>
+              <div className="mb-5 flex items-start gap-3">
+                <div className="rounded-2xl bg-emerald-100 p-3 text-emerald-700">
+                  <Smartphone size={22} />
+                </div>
+
+                <div className="min-w-0">
+                  <h3 className="text-base font-black text-slate-900">
+                    Ready for Payment Collection
+                  </h3>
+                  <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                    Open this customer’s Fund Space page to collect weekly MoMo
+                    contribution and check transparency.
+                  </p>
+                </div>
+              </div>
+
+              <Link
+                href={`/agent/fund-space/${customer.id}`}
+                className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-black text-white transition hover:bg-emerald-800"
+              >
+                Open Fund Space Payment Page
+                <ArrowRight size={16} />
+              </Link>
+
+              <Link
+                href="/agent/fund-space"
+                className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+              >
+                View Customer Fund Space List
+              </Link>
+            </div>
+          ) : (
+            <div>
+              <div className="mb-5 flex items-start gap-3">
+                <div className="rounded-2xl bg-emerald-100 p-3 text-emerald-700">
+                  <UserPlus size={22} />
+                </div>
+
+                <div className="min-w-0">
+                  <h3 className="text-base font-black text-slate-900">
+                    Add Customer to Fund Space
+                  </h3>
+                  <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                    Choose a weekly amount and add the customer if eligible.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                {contributionAmounts.map((amount) => (
+                  <button
+                    key={amount}
+                    type="button"
+                    disabled={!canAddToFundSpace || addingToFundSpace}
+                    onClick={() => onContributionAmountChange(amount)}
+                    className={`rounded-xl border px-3 py-3 text-sm font-black transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                      selectedContributionAmount === amount
+                        ? 'border-emerald-700 bg-emerald-700 text-white shadow-sm'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700'
+                    }`}
+                  >
+                    {formatCurrency(amount)}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                disabled={!canAddToFundSpace || addingToFundSpace}
+                onClick={onAddToFundSpace}
+                className="mt-5 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-black text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                {addingToFundSpace ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    Adding...
+                  </>
+                ) : (
+                  <>
+                    Add to Fund Space
+                    <ArrowRight size={16} />
+                  </>
+                )}
+              </button>
+
+              {!canAddToFundSpace && (
+                <p className="mt-4 text-center text-xs font-semibold leading-5 text-slate-500">
+                  {fundSpaceStatus?.eligibility_reason ||
+                    'This customer is not eligible to join Fund Space yet.'}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function FileInput({
+  label,
+  file,
+  onChange,
+}: {
+  label: string;
+  file: File | null;
+  onChange: (file: File | null) => void;
+}) {
+  return (
+    <div>
+      <label className="text-sm font-bold text-slate-700">{label}</label>
+      <input
+        type="file"
+        accept="image/jpeg,image/jpg,image/png,image/webp"
+        onChange={(event) => onChange(event.target.files?.[0] || null)}
+        className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"
+      />
+      {file && (
+        <p className="mt-1 text-xs font-semibold text-slate-500">
+          Selected: {file.name}
+        </p>
+      )}
+    </div>
   );
 }

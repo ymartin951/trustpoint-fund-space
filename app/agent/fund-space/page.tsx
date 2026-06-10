@@ -1,8 +1,8 @@
-"use client";
+'use client';
 
-import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { createClient } from "@supabase/supabase-js";
+import type { ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import {
   AlertCircle,
   ArrowRight,
@@ -12,21 +12,18 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  Smartphone,
+  UserPlus,
   Users,
   Wallet,
   XCircle,
-} from "lucide-react";
+} from 'lucide-react';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error("Missing Supabase public environment variables.");
-}
-
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+import { supabase } from '@/lib/supabase/client';
 
 const contributionAmounts = [50, 100, 200, 500];
+
+type FilterType = 'ALL' | 'NEEDS_PAYMENT' | 'JOINED' | 'ELIGIBLE' | 'BLOCKED';
 
 type Summary = {
   total_customers: number;
@@ -102,45 +99,585 @@ type JoinApiResponse = {
 };
 
 function formatCurrency(amount: number | null | undefined) {
-  return `GH₵${Number(amount || 0).toLocaleString("en-GH")}`;
+  return `GH₵${Number(amount || 0).toLocaleString('en-GH', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
-function formatDate(dateString: string | null) {
-  if (!dateString) return "Not available";
+function formatDate(dateString: string | null | undefined) {
+  if (!dateString) return 'Not available';
 
-  return new Intl.DateTimeFormat("en-GH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  }).format(new Date(dateString));
+  const date = new Date(dateString);
+
+  if (Number.isNaN(date.getTime())) return 'Invalid date';
+
+  return new Intl.DateTimeFormat('en-GH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }).format(date);
+}
+
+function formatLabel(value: string | null | undefined) {
+  if (!value) return 'Not set';
+
+  return value
+    .replaceAll('_', ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function getStatusStyle(status: string | null | undefined) {
-  const value = status || "PENDING";
+  const value = String(status || 'PENDING').toUpperCase();
 
-  if (["ACTIVE", "VERIFIED", "APPROVED", "COMPLETED"].includes(value)) {
-    return "border-emerald-100 bg-emerald-50 text-emerald-700";
-  }
-
-  if (["PENDING", "FORMING", "PENDING_VERIFICATION"].includes(value)) {
-    return "border-amber-100 bg-amber-50 text-amber-700";
+  if (
+    ['ACTIVE', 'VERIFIED', 'APPROVED', 'COMPLETED', 'PAID', 'SUCCESS'].includes(
+      value
+    )
+  ) {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700';
   }
 
   if (
     [
-      "REJECTED",
-      "FAILED",
-      "INACTIVE",
-      "SUSPENDED",
-      "BLACKLISTED",
-      "REMOVED",
-      "DEFAULTED",
+      'PENDING',
+      'FORMING',
+      'PENDING_VERIFICATION',
+      'PENDING_REVIEW',
+      'PARTIALLY_PAID',
+      'COLLECTING',
     ].includes(value)
   ) {
-    return "border-red-100 bg-red-50 text-red-700";
+    return 'border-amber-200 bg-amber-50 text-amber-700';
   }
 
-  return "border-gray-100 bg-gray-50 text-gray-700";
+  if (
+    [
+      'REJECTED',
+      'FAILED',
+      'INACTIVE',
+      'SUSPENDED',
+      'BLACKLISTED',
+      'REMOVED',
+      'DEFAULTED',
+      'CANCELLED',
+      'BLOCKED',
+    ].includes(value)
+  ) {
+    return 'border-red-200 bg-red-50 text-red-700';
+  }
+
+  return 'border-slate-200 bg-slate-50 text-slate-700';
+}
+
+function getCustomerLocation(customer: AgentCustomer) {
+  return customer.location || customer.city || customer.region || 'Not provided';
+}
+
+function getCustomerWork(customer: AgentCustomer) {
+  return (
+    customer.business_name ||
+    customer.business_type ||
+    customer.occupation ||
+    'Not provided'
+  );
+}
+
+function isCustomerJoined(customer: AgentCustomer) {
+  return Boolean(customer.fund_space_member || customer.fund_space);
+}
+
+function getDefaultSummary(): Summary {
+  return {
+    total_customers: 0,
+    verified_customers: 0,
+    eligible_customers: 0,
+    already_in_fund_space: 0,
+    blocked_customers: 0,
+  };
+}
+
+export default function AgentFundSpacePage() {
+  const [customers, setCustomers] = useState<AgentCustomer[]>([]);
+  const [summary, setSummary] = useState<Summary>(getDefaultSummary());
+  const [selectedAmounts, setSelectedAmounts] = useState<Record<string, number>>(
+    {}
+  );
+
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filter, setFilter] = useState<FilterType>('ALL');
+
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [actionLoadingCustomerId, setActionLoadingCustomerId] = useState<
+    string | null
+  >(null);
+
+  const [message, setMessage] = useState<{
+    type: 'success' | 'error' | 'info';
+    text: string;
+  } | null>(null);
+
+  const getAccessToken = useCallback(async () => {
+    const {
+      data: { session },
+      error,
+    } = await supabase.auth.getSession();
+
+    if (error) {
+      throw new Error(error.message || 'Unable to read your login session.');
+    }
+
+    if (!session?.access_token) {
+      throw new Error(
+        'Your session has expired. Please log in again, then return to Customer Fund Space.'
+      );
+    }
+
+    return session.access_token;
+  }, []);
+
+  const loadCustomers = useCallback(
+    async (showRefreshState = false) => {
+      try {
+        if (showRefreshState) {
+          setRefreshing(true);
+        } else {
+          setLoading(true);
+        }
+
+        setMessage(null);
+
+        const token = await getAccessToken();
+
+        const response = await fetch('/api/agent/fund-space/customers', {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        const result = (await response.json().catch(() => null)) as
+          | CustomersApiResponse
+          | null;
+
+        if (!response.ok || !result?.success) {
+          throw new Error(
+            result?.message || 'Could not load your Fund Space customers.'
+          );
+        }
+
+        const loadedCustomers = result.customers || [];
+
+        setCustomers(loadedCustomers);
+        setSummary(result.summary || getDefaultSummary());
+
+        const defaultAmounts: Record<string, number> = {};
+
+        for (const customer of loadedCustomers) {
+          if (customer.can_add_to_fund_space && !isCustomerJoined(customer)) {
+            defaultAmounts[customer.id] =
+              customer.fund_space?.contribution_amount ||
+              customer.fund_space_member?.contribution_amount ||
+              contributionAmounts[0];
+          }
+        }
+
+        setSelectedAmounts((current) => ({
+          ...defaultAmounts,
+          ...current,
+        }));
+      } catch (error) {
+        const text =
+          error instanceof Error
+            ? error.message
+            : 'Something went wrong while loading customers.';
+
+        setMessage({
+          type: 'error',
+          text,
+        });
+
+        setCustomers([]);
+        setSummary(getDefaultSummary());
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [getAccessToken]
+  );
+
+  useEffect(() => {
+    loadCustomers();
+  }, [loadCustomers]);
+
+  const workStats = useMemo(() => {
+    const joined = customers.filter((customer) => isCustomerJoined(customer));
+    const eligible = customers.filter(
+      (customer) => customer.can_add_to_fund_space && !isCustomerJoined(customer)
+    );
+    const blocked = customers.filter(
+      (customer) => !customer.can_add_to_fund_space && !isCustomerJoined(customer)
+    );
+
+    return {
+      joined: joined.length,
+      eligible: eligible.length,
+      blocked: blocked.length,
+      needsPayment: joined.length,
+    };
+  }, [customers]);
+
+  const filteredCustomers = useMemo(() => {
+    const normalizedSearch = searchTerm.trim().toLowerCase();
+
+    return customers.filter((customer) => {
+      const matchesSearch =
+        !normalizedSearch ||
+        customer.full_name?.toLowerCase().includes(normalizedSearch) ||
+        customer.phone?.toLowerCase().includes(normalizedSearch) ||
+        customer.email?.toLowerCase().includes(normalizedSearch) ||
+        customer.location?.toLowerCase().includes(normalizedSearch) ||
+        customer.city?.toLowerCase().includes(normalizedSearch) ||
+        customer.region?.toLowerCase().includes(normalizedSearch) ||
+        customer.business_name?.toLowerCase().includes(normalizedSearch) ||
+        customer.business_type?.toLowerCase().includes(normalizedSearch);
+
+      const joined = isCustomerJoined(customer);
+
+      const matchesFilter =
+        filter === 'ALL' ||
+        (filter === 'NEEDS_PAYMENT' && joined) ||
+        (filter === 'JOINED' && joined) ||
+        (filter === 'ELIGIBLE' && customer.can_add_to_fund_space && !joined) ||
+        (filter === 'BLOCKED' && !customer.can_add_to_fund_space && !joined);
+
+      return matchesSearch && matchesFilter;
+    });
+  }, [customers, searchTerm, filter]);
+
+  function handleAmountChange(customerId: string, amount: number) {
+    setSelectedAmounts((current) => ({
+      ...current,
+      [customerId]: amount,
+    }));
+  }
+
+  async function handleAddToFundSpace(customer: AgentCustomer) {
+    try {
+      setMessage(null);
+      setActionLoadingCustomerId(customer.id);
+
+      const contributionAmount = selectedAmounts[customer.id];
+
+      if (!contributionAmount) {
+        throw new Error('Please select a weekly contribution amount first.');
+      }
+
+      const token = await getAccessToken();
+
+      const response = await fetch('/api/fund-space/join', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          customer_id: customer.id,
+          contribution_amount: contributionAmount,
+        }),
+      });
+
+      const result = (await response.json().catch(() => null)) as
+        | JoinApiResponse
+        | null;
+
+      if (!response.ok || !result?.success) {
+        throw new Error(
+          result?.message || 'Could not add customer to Fund Space.'
+        );
+      }
+
+      setMessage({
+        type: 'success',
+        text:
+          result.message ||
+          `${customer.full_name} has been added to Fund Space successfully.`,
+      });
+
+      await loadCustomers(true);
+    } catch (error) {
+      setMessage({
+        type: 'error',
+        text:
+          error instanceof Error
+            ? error.message
+            : 'Something went wrong while adding customer to Fund Space.',
+      });
+    } finally {
+      setActionLoadingCustomerId(null);
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <section className="rounded-3xl bg-gradient-to-br from-emerald-800 via-emerald-700 to-teal-700 p-5 text-white shadow-sm md:p-8">
+        <div className="flex flex-col justify-between gap-6 xl:flex-row xl:items-center">
+          <div className="min-w-0 max-w-4xl">
+            <p className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-2 text-xs font-black">
+              <Users className="h-4 w-4" />
+              Customer Fund Space
+            </p>
+
+            <h1 className="break-words text-2xl font-black md:text-4xl">
+              Manage customer Fund Space payments
+            </h1>
+
+            <p className="mt-4 max-w-3xl text-sm font-semibold leading-7 text-emerald-50 md:text-base">
+              This is your agent worklist. Add eligible verified customers to
+              Fund Space, then open each customer’s Fund Space page to collect
+              weekly MoMo payments and view group transparency.
+            </p>
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <HeroStat
+                label="Total Customers"
+                value={summary.total_customers}
+              />
+              <HeroStat
+                label="Already In Fund Space"
+                value={summary.already_in_fund_space}
+              />
+              <HeroStat
+                label="Eligible To Add"
+                value={summary.eligible_customers}
+              />
+              <HeroStat label="Blocked" value={summary.blocked_customers} />
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3 sm:flex-row xl:flex-col">
+            <Link
+              href="/agent/register-customer"
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-white px-5 text-sm font-black text-emerald-700 shadow-sm hover:bg-emerald-50"
+            >
+              <UserPlus className="h-4 w-4" />
+              Register Customer
+            </Link>
+
+            <button
+              type="button"
+              onClick={() => loadCustomers(true)}
+              disabled={loading || refreshing}
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-white/15 px-5 text-sm font-black text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {loading || refreshing ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <RefreshCw size={16} />
+              )}
+              Refresh
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {message && (
+        <AlertBox type={message.type}>
+          {message.type === 'success' ? (
+            <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
+          ) : message.type === 'info' ? (
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+          ) : (
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+          )}
+
+          <div className="min-w-0">
+            <p className="break-words">{message.text}</p>
+
+            {message.text.toLowerCase().includes('session') && (
+              <Link
+                href="/auth/login"
+                className="mt-3 inline-flex rounded-xl bg-white px-4 py-2 text-xs font-black text-red-700 shadow-sm"
+              >
+                Go to login
+              </Link>
+            )}
+          </div>
+        </AlertBox>
+      )}
+
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <StatCard
+          title="Total Customers"
+          value={summary.total_customers}
+          description="Registered under you"
+          icon={<Users className="h-5 w-5" />}
+        />
+
+        <StatCard
+          title="Verified"
+          value={summary.verified_customers}
+          description="Passed verification"
+          icon={<ShieldCheck className="h-5 w-5" />}
+        />
+
+        <StatCard
+          title="Eligible"
+          value={workStats.eligible}
+          description="Can be added now"
+          icon={<CheckCircle2 className="h-5 w-5" />}
+        />
+
+        <StatCard
+          title="In Fund Space"
+          value={workStats.joined}
+          description="Open to collect payment"
+          icon={<Wallet className="h-5 w-5" />}
+        />
+
+        <StatCard
+          title="Blocked"
+          value={workStats.blocked}
+          description="Not eligible now"
+          icon={<XCircle className="h-5 w-5" />}
+        />
+      </section>
+
+      <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="grid gap-4 xl:grid-cols-[1fr_auto] xl:items-center">
+          <div className="min-w-0">
+            <h2 className="text-xl font-black text-slate-900">
+              Customer Fund Space Worklist
+            </h2>
+            <p className="mt-1 text-sm leading-6 text-slate-500">
+              Use this page to decide what to do next for each customer.
+              Customers already in Fund Space should be opened for weekly
+              payment collection.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {(['ALL', 'NEEDS_PAYMENT', 'ELIGIBLE', 'JOINED', 'BLOCKED'] as const).map(
+              (item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setFilter(item)}
+                  className={`rounded-xl px-4 py-2.5 text-sm font-black transition ${
+                    filter === item
+                      ? 'bg-emerald-700 text-white shadow-sm hover:bg-emerald-800'
+                      : 'bg-slate-100 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700'
+                  }`}
+                >
+                  {item === 'ALL'
+                    ? 'All'
+                    : item === 'NEEDS_PAYMENT'
+                      ? 'Collect Payment'
+                      : item === 'ELIGIBLE'
+                        ? 'Eligible'
+                        : item === 'JOINED'
+                          ? 'Joined'
+                          : 'Blocked'}
+                </button>
+              )
+            )}
+          </div>
+        </div>
+
+        <div className="relative mt-5">
+          <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="Search by name, phone, location, or business..."
+            className="min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-bold text-slate-700 outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-50"
+          />
+        </div>
+      </section>
+
+      <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
+        {loading ? (
+          <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 p-8 text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50">
+              <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+            </div>
+            <p className="text-sm font-bold text-slate-500">
+              Loading your registered customers...
+            </p>
+          </div>
+        ) : filteredCustomers.length === 0 ? (
+          <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 p-8 text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-slate-50">
+              <Users className="h-8 w-8 text-slate-400" />
+            </div>
+            <h2 className="text-lg font-black text-slate-900">
+              No customers found
+            </h2>
+            <p className="max-w-md text-sm font-semibold leading-6 text-slate-500">
+              No customer matches your current search or filter. Try changing
+              the filter, register a customer, or refresh the page.
+            </p>
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {filteredCustomers.map((customer) => {
+              const selectedAmount = selectedAmounts[customer.id];
+              const isAdding = actionLoadingCustomerId === customer.id;
+              const joined = isCustomerJoined(customer);
+
+              return (
+                <CustomerWorklistRow
+                  key={customer.id}
+                  customer={customer}
+                  selectedAmount={selectedAmount}
+                  isAdding={isAdding}
+                  joined={joined}
+                  onAmountChange={(amount) =>
+                    handleAmountChange(customer.id, amount)
+                  }
+                  onAdd={() => handleAddToFundSpace(customer)}
+                />
+              );
+            })}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function AlertBox({
+  type,
+  children,
+}: {
+  type: 'success' | 'error' | 'info';
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={`flex items-start gap-3 rounded-3xl border p-5 text-sm font-bold ${
+        type === 'success'
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          : type === 'info'
+            ? 'border-blue-200 bg-blue-50 text-blue-700'
+            : 'border-red-200 bg-red-50 text-red-700'
+      }`}
+    >
+      {children}
+    </div>
+  );
+}
+
+function HeroStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="min-w-0 rounded-2xl bg-white/15 px-4 py-3 backdrop-blur">
+      <p className="break-words text-xs font-bold text-emerald-50">{label}</p>
+      <p className="mt-1 text-2xl font-black text-white">{value}</p>
+    </div>
+  );
 }
 
 function StatCard({
@@ -151,561 +688,242 @@ function StatCard({
 }: {
   title: string;
   value: number;
-  icon: React.ReactNode;
+  icon: ReactNode;
   description: string;
 }) {
   return (
-    <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-semibold text-gray-500">{title}</p>
-          <h3 className="mt-2 text-3xl font-bold text-gray-900">{value}</h3>
-          <p className="mt-1 text-sm leading-6 text-gray-500">{description}</p>
-        </div>
+    <div className="min-w-0 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-3 inline-flex rounded-2xl bg-emerald-50 p-3 text-emerald-700">
+        {icon}
+      </div>
 
-        <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-700">
-          {icon}
-        </div>
+      <p className="break-words text-sm font-bold text-slate-500">{title}</p>
+      <h3 className="mt-1 text-2xl font-black text-slate-900">{value}</h3>
+      <p className="mt-1 break-words text-xs font-semibold leading-5 text-slate-500">
+        {description}
+      </p>
+    </div>
+  );
+}
+
+function StatusPill({ status }: { status: string | null | undefined }) {
+  return (
+    <span
+      className={`inline-flex max-w-full items-center rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
+        status
+      )}`}
+    >
+      <span className="truncate">{formatLabel(status)}</span>
+    </span>
+  );
+}
+
+function InfoBox({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="min-w-0 rounded-2xl bg-slate-50 p-4">
+      <p className="break-words text-[11px] font-black uppercase tracking-wide text-slate-400">
+        {label}
+      </p>
+      <div className="mt-1 break-words text-sm font-bold leading-6 text-slate-800">
+        {value}
       </div>
     </div>
   );
 }
 
-export default function AgentFundSpacePage() {
-  const [customers, setCustomers] = useState<AgentCustomer[]>([]);
-  const [summary, setSummary] = useState<Summary>({
-    total_customers: 0,
-    verified_customers: 0,
-    eligible_customers: 0,
-    already_in_fund_space: 0,
-    blocked_customers: 0,
-  });
-
-  const [loading, setLoading] = useState(true);
-  const [actionLoadingCustomerId, setActionLoadingCustomerId] = useState<
-    string | null
-  >(null);
-  const [selectedAmounts, setSelectedAmounts] = useState<
-    Record<string, number>
-  >({});
-  const [searchTerm, setSearchTerm] = useState("");
-  const [filter, setFilter] = useState<
-    "ALL" | "ELIGIBLE" | "JOINED" | "BLOCKED"
-  >("ALL");
-  const [message, setMessage] = useState<{
-    type: "success" | "error";
-    text: string;
-  } | null>(null);
-
-  const getAccessToken = async () => {
-    const {
-      data: { session },
-      error,
-    } = await supabase.auth.getSession();
-
-    if (error || !session?.access_token) {
-      throw new Error("Your session has expired. Please login again.");
-    }
-
-    return session.access_token;
-  };
-
-  const loadCustomers = async () => {
-    try {
-      setLoading(true);
-      setMessage(null);
-
-      const token = await getAccessToken();
-
-      const response = await fetch("/api/agent/fund-space/customers", {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      const result = (await response.json()) as CustomersApiResponse;
-
-      if (!response.ok || !result.success) {
-        throw new Error(
-          result.message || "Could not load Fund Space customers."
-        );
-      }
-
-      setCustomers(result.customers || []);
-      setSummary(
-        result.summary || {
-          total_customers: 0,
-          verified_customers: 0,
-          eligible_customers: 0,
-          already_in_fund_space: 0,
-          blocked_customers: 0,
-        }
-      );
-    } catch (error: any) {
-      setMessage({
-        type: "error",
-        text:
-          error?.message || "Something went wrong while loading customers.",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadCustomers();
-  }, []);
-
-  const filteredCustomers = useMemo(() => {
-    const normalizedSearch = searchTerm.trim().toLowerCase();
-
-    return customers.filter((customer) => {
-      const matchesSearch =
-        !normalizedSearch ||
-        customer.full_name.toLowerCase().includes(normalizedSearch) ||
-        customer.phone?.toLowerCase().includes(normalizedSearch) ||
-        customer.location?.toLowerCase().includes(normalizedSearch) ||
-        customer.city?.toLowerCase().includes(normalizedSearch) ||
-        customer.region?.toLowerCase().includes(normalizedSearch) ||
-        customer.business_name?.toLowerCase().includes(normalizedSearch);
-
-      const matchesFilter =
-        filter === "ALL" ||
-        (filter === "ELIGIBLE" && customer.can_add_to_fund_space) ||
-        (filter === "JOINED" && Boolean(customer.fund_space_member)) ||
-        (filter === "BLOCKED" && !customer.can_add_to_fund_space);
-
-      return matchesSearch && matchesFilter;
-    });
-  }, [customers, searchTerm, filter]);
-
-  const handleAmountChange = (customerId: string, amount: number) => {
-    setSelectedAmounts((current) => ({
-      ...current,
-      [customerId]: amount,
-    }));
-  };
-
-  const handleAddToFundSpace = async (customer: AgentCustomer) => {
-    try {
-      setMessage(null);
-      setActionLoadingCustomerId(customer.id);
-
-      const contributionAmount = selectedAmounts[customer.id];
-
-      if (!contributionAmount) {
-        throw new Error("Please select a contribution amount first.");
-      }
-
-      const token = await getAccessToken();
-
-      const response = await fetch("/api/fund-space/join", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          customer_id: customer.id,
-          contribution_amount: contributionAmount,
-        }),
-      });
-
-      const result = (await response.json()) as JoinApiResponse;
-
-      if (!response.ok || !result.success) {
-        throw new Error(
-          result.message || "Could not add customer to Fund Space."
-        );
-      }
-
-      setMessage({
-        type: "success",
-        text:
-          result.message ||
-          `${customer.full_name} has been added to Fund Space successfully.`,
-      });
-
-      await loadCustomers();
-    } catch (error: any) {
-      setMessage({
-        type: "error",
-        text:
-          error?.message ||
-          "Something went wrong while adding customer to Fund Space.",
-      });
-    } finally {
-      setActionLoadingCustomerId(null);
-    }
-  };
-
+function CustomerWorklistRow({
+  customer,
+  selectedAmount,
+  isAdding,
+  joined,
+  onAmountChange,
+  onAdd,
+}: {
+  customer: AgentCustomer;
+  selectedAmount: number | undefined;
+  isAdding: boolean;
+  joined: boolean;
+  onAmountChange: (amount: number) => void;
+  onAdd: () => void;
+}) {
   return (
-    <div className="space-y-8">
-      <div className="rounded-3xl bg-gradient-to-r from-emerald-700 via-emerald-600 to-teal-600 p-6 text-white shadow-sm md:p-8">
-        <div className="flex flex-col justify-between gap-6 lg:flex-row lg:items-center">
-          <div className="max-w-3xl">
-            <p className="mb-3 inline-flex rounded-full bg-white/15 px-4 py-1 text-sm font-medium">
-              Agent Fund Space
-            </p>
+    <article className="p-5 md:p-6">
+      <div className="grid gap-5 xl:grid-cols-[1fr_340px]">
+        <div className="min-w-0">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <h3 className="break-words text-xl font-black text-slate-900">
+                {customer.full_name || 'Unknown customer'}
+              </h3>
 
-            <h1 className="text-3xl font-bold md:text-4xl">
-              Add verified customers to Fund Space
-            </h1>
+              <p className="mt-1 break-words text-sm font-semibold text-slate-500">
+                {customer.phone || 'No phone'} • {getCustomerLocation(customer)}
+              </p>
+            </div>
 
-            <p className="mt-4 max-w-2xl text-sm leading-7 text-emerald-50 md:text-base">
-              Manage your registered customers, select a contribution plan, and
-              add eligible verified customers into trusted contribution groups.
-            </p>
-
-            <div className="mt-6 flex flex-wrap gap-3">
-              <div className="rounded-2xl bg-white/15 px-4 py-3">
-                <p className="text-xs font-medium text-emerald-50">
-                  Eligible Customers
-                </p>
-                <p className="mt-1 text-2xl font-bold">
-                  {summary.eligible_customers}
-                </p>
-              </div>
-
-              <div className="rounded-2xl bg-white/15 px-4 py-3">
-                <p className="text-xs font-medium text-emerald-50">
-                  Already Joined
-                </p>
-                <p className="mt-1 text-2xl font-bold">
-                  {summary.already_in_fund_space}
-                </p>
-              </div>
+            <div className="flex flex-wrap gap-2">
+              <StatusPill status={customer.verification_status} />
+              <StatusPill status={customer.status} />
+              {customer.is_blacklisted && <StatusPill status="BLACKLISTED" />}
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={loadCustomers}
-            disabled={loading}
-            className="inline-flex min-h-12 w-fit items-center justify-center gap-2 rounded-xl bg-white/15 px-5 py-3 text-sm font-bold text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {loading ? (
-              <Loader2 size={16} className="animate-spin" />
-            ) : (
-              <RefreshCw size={16} />
-            )}
-            Refresh
-          </button>
-        </div>
-      </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <InfoBox label="Phone" value={customer.phone || 'Not provided'} />
+            <InfoBox label="Location" value={getCustomerLocation(customer)} />
+            <InfoBox
+              label="Category"
+              value={formatLabel(customer.user_category)}
+            />
+            <InfoBox label="Registered" value={formatDate(customer.created_at)} />
+          </div>
 
-      {message && (
-        <div
-          className={`flex items-start gap-3 rounded-2xl border p-4 text-sm font-semibold ${
-            message.type === "success"
-              ? "border-emerald-100 bg-emerald-50 text-emerald-700"
-              : "border-red-100 bg-red-50 text-red-700"
-          }`}
-        >
-          {message.type === "success" ? (
-            <CheckCircle2 className="mt-0.5 h-5 w-5 flex-none" />
-          ) : (
-            <AlertCircle className="mt-0.5 h-5 w-5 flex-none" />
-          )}
-          <p>{message.text}</p>
-        </div>
-      )}
-
-      <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-5">
-        <StatCard
-          title="Total Customers"
-          value={summary.total_customers}
-          description="Registered under you"
-          icon={<Users className="h-5 w-5" />}
-        />
-        <StatCard
-          title="Verified"
-          value={summary.verified_customers}
-          description="Ready for Fund Space"
-          icon={<ShieldCheck className="h-5 w-5" />}
-        />
-        <StatCard
-          title="Eligible"
-          value={summary.eligible_customers}
-          description="Can be added now"
-          icon={<CheckCircle2 className="h-5 w-5" />}
-        />
-        <StatCard
-          title="Joined"
-          value={summary.already_in_fund_space}
-          description="Currently in Fund Space"
-          icon={<Wallet className="h-5 w-5" />}
-        />
-        <StatCard
-          title="Blocked"
-          value={summary.blocked_customers}
-          description="Not eligible now"
-          icon={<XCircle className="h-5 w-5" />}
-        />
-      </section>
-
-      <section className="rounded-3xl border border-gray-100 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="relative w-full lg:max-w-md">
-            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-            <input
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Search by name, phone, location, or business..."
-              className="w-full rounded-2xl border border-gray-200 bg-gray-50 py-3 pl-11 pr-4 text-sm outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-50"
+          <div className="mt-4 grid gap-3 lg:grid-cols-2">
+            <InfoBox label="Work / Business" value={getCustomerWork(customer)} />
+            <InfoBox
+              label="Eligibility"
+              value={customer.eligibility_reason || 'Not provided'}
             />
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            {(["ALL", "ELIGIBLE", "JOINED", "BLOCKED"] as const).map(
-              (item) => (
-                <button
-                  key={item}
-                  type="button"
-                  onClick={() => setFilter(item)}
-                  className={`rounded-xl px-4 py-2.5 text-sm font-bold transition ${
-                    filter === item
-                      ? "bg-emerald-600 text-white shadow-sm hover:bg-emerald-700"
-                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                  }`}
-                >
-                  {item === "ALL"
-                    ? "All"
-                    : item === "ELIGIBLE"
-                      ? "Eligible"
-                      : item === "JOINED"
-                        ? "Already Joined"
-                        : "Blocked"}
-                </button>
-              )
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-3xl border border-gray-100 bg-white shadow-sm">
-        {loading ? (
-          <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 p-8 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50">
-              <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
-            </div>
-            <p className="text-sm font-medium text-gray-500">
-              Loading your registered customers...
-            </p>
-          </div>
-        ) : filteredCustomers.length === 0 ? (
-          <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 p-8 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-gray-50">
-              <Users className="h-8 w-8 text-gray-400" />
-            </div>
-            <h2 className="text-lg font-bold text-gray-900">
-              No customers found
-            </h2>
-            <p className="max-w-md text-sm leading-6 text-gray-500">
-              No customer matches your current search or filter. Try changing
-              the filter or refresh the page.
-            </p>
-          </div>
-        ) : (
-          <div className="divide-y divide-gray-100">
-            {filteredCustomers.map((customer) => {
-              const selectedAmount = selectedAmounts[customer.id];
-              const isAdding = actionLoadingCustomerId === customer.id;
-              const isJoined = Boolean(customer.fund_space_member);
-
-              return (
-                <div key={customer.id} className="p-5 md:p-6">
-                  <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-xl font-bold text-gray-900">
-                          {customer.full_name}
-                        </h3>
-
-                        <span
-                          className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                            customer.verification_status
-                          )}`}
-                        >
-                          {customer.verification_status}
-                        </span>
-
-                        <span
-                          className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                            customer.status
-                          )}`}
-                        >
-                          {customer.status}
-                        </span>
-
-                        {customer.is_blacklisted && (
-                          <span className="rounded-full border border-red-100 bg-red-50 px-3 py-1 text-xs font-bold text-red-700">
-                            Blacklisted
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="mt-4 grid gap-3 text-sm text-gray-600 sm:grid-cols-2 lg:grid-cols-4">
-                        <div className="rounded-2xl bg-gray-50 p-4">
-                          <p className="text-xs font-semibold uppercase text-gray-400">
-                            Phone
-                          </p>
-                          <p className="mt-1 font-bold text-gray-800">
-                            {customer.phone || "Not provided"}
-                          </p>
-                        </div>
-
-                        <div className="rounded-2xl bg-gray-50 p-4">
-                          <p className="text-xs font-semibold uppercase text-gray-400">
-                            Location
-                          </p>
-                          <p className="mt-1 font-bold text-gray-800">
-                            {customer.location ||
-                              customer.city ||
-                              customer.region ||
-                              "Not provided"}
-                          </p>
-                        </div>
-
-                        <div className="rounded-2xl bg-gray-50 p-4">
-                          <p className="text-xs font-semibold uppercase text-gray-400">
-                            Category
-                          </p>
-                          <p className="mt-1 font-bold text-gray-800">
-                            {customer.user_category || "Not provided"}
-                          </p>
-                        </div>
-
-                        <div className="rounded-2xl bg-gray-50 p-4">
-                          <p className="text-xs font-semibold uppercase text-gray-400">
-                            Registered
-                          </p>
-                          <p className="mt-1 font-bold text-gray-800">
-                            {formatDate(customer.created_at)}
-                          </p>
-                        </div>
-                      </div>
-
-                      {(customer.business_name ||
-                        customer.business_type ||
-                        customer.occupation) && (
-                        <div className="mt-4 rounded-2xl bg-gray-50 p-4 text-sm text-gray-600">
-                          <span className="font-bold text-gray-800">
-                            Work/Business:
-                          </span>{" "}
-                          {customer.business_name ||
-                            customer.business_type ||
-                            customer.occupation}
-                        </div>
-                      )}
-
-                      {isJoined && customer.fund_space && (
-                        <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50 p-5">
-                          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                            <div>
-                              <p className="text-sm font-bold text-emerald-700">
-                                Already in Fund Space
-                              </p>
-                              <p className="mt-1 text-sm leading-6 text-emerald-700">
-                                {customer.fund_space.name} •{" "}
-                                {formatCurrency(
-                                  customer.fund_space.contribution_amount
-                                )}{" "}
-                                • {customer.fund_space.status}
-                              </p>
-                            </div>
-
-                            <Link
-                              href={`/agent/fund-space/${customer.id}`}
-                              className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white transition hover:bg-emerald-700"
-                            >
-                              View Customer Fund Space
-                              <ArrowRight size={16} />
-                            </Link>
-                          </div>
-                        </div>
-                      )}
-
-                      {!customer.can_add_to_fund_space && !isJoined && (
-                        <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm font-semibold text-amber-700">
-                          {customer.eligibility_reason}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="w-full rounded-3xl border border-gray-100 bg-gray-50 p-5 xl:w-[340px]">
-                      <div className="flex items-center gap-3">
-                        <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-700">
-                          <CircleDollarSign className="h-5 w-5" />
-                        </div>
-
-                        <div>
-                          <p className="text-sm font-bold text-gray-900">
-                            Fund Space Action
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            Choose weekly amount
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="mt-5 grid grid-cols-2 gap-2">
-                        {contributionAmounts.map((amount) => (
-                          <button
-                            key={amount}
-                            type="button"
-                            disabled={
-                              !customer.can_add_to_fund_space || isAdding
-                            }
-                            onClick={() =>
-                              handleAmountChange(customer.id, amount)
-                            }
-                            className={`rounded-xl border px-3 py-3 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                              selectedAmount === amount
-                                ? "border-emerald-600 bg-emerald-600 text-white shadow-sm"
-                                : "border-gray-200 bg-white text-gray-700 hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700"
-                            }`}
-                          >
-                            {formatCurrency(amount)}
-                          </button>
-                        ))}
-                      </div>
-
-                      <button
-                        type="button"
-                        disabled={
-                          !customer.can_add_to_fund_space ||
-                          !selectedAmount ||
-                          isAdding
-                        }
-                        onClick={() => handleAddToFundSpace(customer)}
-                        className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-gray-300"
-                      >
-                        {isAdding ? (
-                          <>
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                            Adding...
-                          </>
-                        ) : (
-                          <>
-                            Add to Fund Space
-                            <ArrowRight size={16} />
-                          </>
-                        )}
-                      </button>
-
-                      <p className="mt-4 text-center text-xs font-medium text-gray-500">
-                        Status: {customer.eligibility_reason}
-                      </p>
-                    </div>
-                  </div>
+          {joined && customer.fund_space && (
+            <div className="mt-4 rounded-3xl border border-emerald-100 bg-emerald-50 p-5">
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                <div className="min-w-0">
+                  <p className="text-sm font-black text-emerald-800">
+                    Customer is already in Fund Space
+                  </p>
+                  <p className="mt-1 break-words text-sm font-semibold leading-6 text-emerald-700">
+                    {customer.fund_space.name} •{' '}
+                    {formatCurrency(customer.fund_space.contribution_amount)} •{' '}
+                    {formatLabel(customer.fund_space.status)} • Round{' '}
+                    {customer.fund_space.current_round_number || 0}
+                  </p>
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-    </div>
+
+                <Link
+                  href={`/agent/fund-space/${customer.id}`}
+                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-black text-white transition hover:bg-emerald-800"
+                >
+                  <Smartphone className="h-4 w-4" />
+                  Collect / View Payments
+                  <ArrowRight size={16} />
+                </Link>
+              </div>
+            </div>
+          )}
+
+          {!joined && !customer.can_add_to_fund_space && (
+            <div className="mt-4 rounded-3xl border border-amber-100 bg-amber-50 p-5 text-sm font-bold leading-6 text-amber-700">
+              {customer.eligibility_reason ||
+                'This customer is not eligible to join Fund Space yet.'}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+          {joined ? (
+            <div>
+              <div className="mb-4 flex items-start gap-3">
+                <div className="rounded-2xl bg-emerald-100 p-3 text-emerald-700">
+                  <Wallet className="h-5 w-5" />
+                </div>
+
+                <div className="min-w-0">
+                  <p className="text-sm font-black text-slate-900">
+                    Weekly Collection
+                  </p>
+                  <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                    Open the customer’s Fund Space page to collect payment.
+                  </p>
+                </div>
+              </div>
+
+              <Link
+                href={`/agent/fund-space/${customer.id}`}
+                className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-black text-white transition hover:bg-emerald-800"
+              >
+                Collect Payment
+                <ArrowRight size={16} />
+              </Link>
+
+              <div className="mt-4 grid gap-3">
+                <InfoBox
+                  label="Weekly Amount"
+                  value={formatCurrency(
+                    customer.fund_space?.contribution_amount ||
+                      customer.fund_space_member?.contribution_amount
+                  )}
+                />
+                <InfoBox
+                  label="Member Status"
+                  value={formatLabel(customer.fund_space_member?.status)}
+                />
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div className="mb-4 flex items-start gap-3">
+                <div className="rounded-2xl bg-emerald-100 p-3 text-emerald-700">
+                  <CircleDollarSign className="h-5 w-5" />
+                </div>
+
+                <div className="min-w-0">
+                  <p className="text-sm font-black text-slate-900">
+                    Add To Fund Space
+                  </p>
+                  <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                    Choose the customer’s weekly contribution amount.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                {contributionAmounts.map((amount) => (
+                  <button
+                    key={amount}
+                    type="button"
+                    disabled={!customer.can_add_to_fund_space || isAdding}
+                    onClick={() => onAmountChange(amount)}
+                    className={`rounded-xl border px-3 py-3 text-sm font-black transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                      selectedAmount === amount
+                        ? 'border-emerald-700 bg-emerald-700 text-white shadow-sm'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700'
+                    }`}
+                  >
+                    {formatCurrency(amount)}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                disabled={
+                  !customer.can_add_to_fund_space || !selectedAmount || isAdding
+                }
+                onClick={onAdd}
+                className="mt-5 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-5 text-sm font-black text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                {isAdding ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Adding...
+                  </>
+                ) : (
+                  <>
+                    Add Customer
+                    <ArrowRight size={16} />
+                  </>
+                )}
+              </button>
+
+              <p className="mt-4 text-center text-xs font-semibold leading-5 text-slate-500">
+                {customer.eligibility_reason}
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </article>
   );
 }
