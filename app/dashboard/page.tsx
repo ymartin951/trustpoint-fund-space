@@ -1,14 +1,17 @@
 'use client';
 
 import Link from 'next/link';
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowRight,
   BadgeCheck,
-  CalendarDays,
-  CheckCircle2,
+  Bell,
   CircleDollarSign,
   Clock,
+  Home,
+  LifeBuoy,
   Loader2,
   RefreshCw,
   ShieldCheck,
@@ -18,9 +21,9 @@ import {
   Wallet,
 } from 'lucide-react';
 
-import { supabase } from '@/lib/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import type { Database } from '@/lib/database.types';
+import { supabase } from '@/lib/supabase/client';
 
 type FundSpaceMember = {
   id: string;
@@ -83,10 +86,25 @@ type Payout = {
   created_at: string | null;
 };
 
+type NotificationRow = {
+  id: string;
+  title: string | null;
+  message: string | null;
+  type: string | null;
+  category: string | null;
+  priority: string | null;
+  is_read: boolean | null;
+  action_href?: string | null;
+  created_at: string | null;
+};
+
 type Transaction = Database['public']['Tables']['transactions']['Row'];
 
 function formatCurrency(amount: number | string | null | undefined) {
-  return `GH₵${Number(amount || 0).toLocaleString('en-GH', {
+  const value = Number(amount || 0);
+  const sign = value < 0 ? '-' : '';
+
+  return `${sign}GH₵${Math.abs(value).toLocaleString('en-GH', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
@@ -135,6 +153,8 @@ function getStatusStyle(status: string | null | undefined) {
       'FORMING',
       'PARTIALLY_PAID',
       'PENDING_ADMIN_APPROVAL',
+      'PENDING_REVIEW',
+      'OVERDUE',
     ].includes(value)
   ) {
     return 'border-amber-100 bg-amber-50 text-amber-700';
@@ -148,13 +168,7 @@ function getStatusStyle(status: string | null | undefined) {
     return 'border-red-100 bg-red-50 text-red-700';
   }
 
-  return 'border-gray-100 bg-gray-50 text-gray-700';
-}
-
-function getPayoutPosition(member: FundSpaceMember | null) {
-  if (!member) return null;
-
-  return member.payout_order || member.position_number || null;
+  return 'border-slate-100 bg-slate-50 text-slate-700';
 }
 
 function getContributionRemaining(contribution: Contribution | null) {
@@ -164,6 +178,12 @@ function getContributionRemaining(contribution: Contribution | null) {
     Number(contribution.amount_due || 0) - Number(contribution.amount_paid || 0),
     0
   );
+}
+
+function getPayoutPosition(member: FundSpaceMember | null) {
+  if (!member) return null;
+
+  return member.payout_order || member.position_number || null;
 }
 
 function getTransactionDirectionValue(transaction: Transaction) {
@@ -183,8 +203,19 @@ function getTransactionDirectionValue(transaction: Transaction) {
 export default function DashboardPage() {
   const { profile, loading } = useAuth();
 
+  const profileRecord = profile as
+    | {
+        id?: string | null;
+        full_name?: string | null;
+        status?: string | null;
+        verification_status?: string | null;
+        trust_score?: number | null;
+      }
+    | null;
+
   const [pageLoading, setPageLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
   const [fundSpaceMember, setFundSpaceMember] =
     useState<FundSpaceMember | null>(null);
@@ -198,8 +229,9 @@ export default function DashboardPage() {
   const [recentTransactions, setRecentTransactions] = useState<Transaction[]>(
     []
   );
-
-  const [errorMessage, setErrorMessage] = useState('');
+  const [recentNotifications, setRecentNotifications] = useState<
+    NotificationRow[]
+  >([]);
 
   const loadWallet = useCallback(async (userId: string) => {
     const { error: walletCreateError } = await supabase.rpc(
@@ -365,6 +397,25 @@ export default function DashboardPage() {
     setRecentTransactions((data || []) as Transaction[]);
   }, []);
 
+  const loadRecentNotifications = useCallback(async (userId: string) => {
+    const { data, error } = await supabase
+      .from('notifications')
+      .select(
+        'id, title, message, type, category, priority, is_read, action_href, created_at'
+      )
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(5);
+
+    if (error) {
+      console.warn('Recent notifications load warning:', error.message);
+      setRecentNotifications([]);
+      return;
+    }
+
+    setRecentNotifications((data || []) as unknown as NotificationRow[]);
+  }, []);
+
   const loadDashboard = useCallback(
     async (userId: string, showRefreshState = false) => {
       try {
@@ -384,6 +435,7 @@ export default function DashboardPage() {
           loadPendingContribution(userId, fundSpaceId),
           loadLatestPayout(userId, fundSpaceId),
           loadRecentTransactions(userId),
+          loadRecentNotifications(userId),
         ]);
       } catch (error: unknown) {
         console.error('Dashboard load error:', error);
@@ -405,6 +457,7 @@ export default function DashboardPage() {
       loadPendingContribution,
       loadLatestPayout,
       loadRecentTransactions,
+      loadRecentNotifications,
     ]
   );
 
@@ -426,7 +479,7 @@ export default function DashboardPage() {
           throw userError;
         }
 
-        const userId = profile?.id || user?.id;
+        const userId = profileRecord?.id || user?.id;
 
         if (!userId) {
           setErrorMessage(
@@ -459,11 +512,11 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [loading, profile?.id, loadDashboard]);
+  }, [loading, profileRecord?.id, loadDashboard]);
 
-  const verificationStatus = profile?.verification_status ?? 'PENDING';
-  const accountStatus = profile?.status ?? 'ACTIVE';
-  const trustScore = profile?.trust_score ?? 0;
+  const verificationStatus = profileRecord?.verification_status ?? 'PENDING';
+  const accountStatus = profileRecord?.status ?? 'ACTIVE';
+  const trustScore = Number(profileRecord?.trust_score || 0);
 
   const isVerified = verificationStatus === 'VERIFIED';
   const isActive = accountStatus === 'ACTIVE';
@@ -480,9 +533,12 @@ export default function DashboardPage() {
       : 0;
 
   const payoutPosition = getPayoutPosition(fundSpaceMember);
-
   const pendingContributionRemaining =
     getContributionRemaining(pendingContribution);
+
+  const unreadNotificationCount = recentNotifications.filter(
+    (notification) => !notification.is_read
+  ).length;
 
   const confirmedTransactionStats = useMemo(() => {
     const successfulTransactions = recentTransactions.filter((transaction) =>
@@ -497,11 +553,17 @@ export default function DashboardPage() {
     );
 
     const creditValue = successfulTransactions
-      .filter((transaction) => String(transaction.direction).toUpperCase() === 'CREDIT')
+      .filter(
+        (transaction) =>
+          String(transaction.direction || '').toUpperCase() === 'CREDIT'
+      )
       .reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0);
 
     const debitValue = successfulTransactions
-      .filter((transaction) => String(transaction.direction).toUpperCase() === 'DEBIT')
+      .filter(
+        (transaction) =>
+          String(transaction.direction || '').toUpperCase() === 'DEBIT'
+      )
       .reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0);
 
     return {
@@ -514,10 +576,16 @@ export default function DashboardPage() {
 
   if (loading || pageLoading) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="mx-auto mb-4 h-10 w-10 animate-spin text-emerald-600" />
-          <p className="text-sm text-gray-500">Loading dashboard...</p>
+      <div className="flex min-h-[70vh] items-center justify-center bg-slate-50 px-4">
+        <div className="w-full max-w-sm rounded-[2rem] border border-slate-200 bg-white p-8 text-center shadow-sm">
+          <Loader2 className="mx-auto mb-4 h-10 w-10 animate-spin text-emerald-700" />
+          <p className="text-sm font-semibold text-slate-700">
+            Loading your TrustPoint dashboard...
+          </p>
+          <p className="mt-2 text-xs leading-5 text-slate-500">
+            Please wait while we check your Fund Space, wallet, payments, and
+            notifications.
+          </p>
         </div>
       </div>
     );
@@ -525,407 +593,596 @@ export default function DashboardPage() {
 
   if (!isActive) {
     return (
-      <div className="rounded-2xl border border-red-100 bg-red-50 p-6">
-        <h2 className="text-xl font-bold text-red-700">Account inactive</h2>
-        <p className="mt-2 text-sm text-red-600">
-          Your account is currently inactive. Please contact support.
-        </p>
-      </div>
+      <main className="min-h-[70vh] bg-slate-50 px-4 py-8">
+        <section className="mx-auto max-w-3xl rounded-[2rem] border border-red-100 bg-red-50 p-6 shadow-sm">
+          <div className="flex gap-3">
+            <AlertTriangle className="mt-1 h-6 w-6 shrink-0 text-red-600" />
+            <div>
+              <h1 className="text-xl font-black text-red-800">
+                Account inactive
+              </h1>
+              <p className="mt-2 text-sm leading-6 text-red-700">
+                Your account is currently inactive. Please contact TrustPoint
+                support for help.
+              </p>
+
+              <Link
+                href="/support"
+                className="mt-5 inline-flex items-center justify-center gap-2 rounded-2xl bg-red-700 px-5 py-3 text-sm font-bold text-white hover:bg-red-800"
+              >
+                Contact Support
+                <ArrowRight size={16} />
+              </Link>
+            </div>
+          </div>
+        </section>
+      </main>
     );
   }
 
   return (
-    <div className="space-y-8">
-      <div className="rounded-3xl bg-gradient-to-r from-emerald-700 via-emerald-600 to-teal-600 p-8 text-white shadow-sm">
-        <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
-          <div>
-            <p className="mb-3 inline-flex rounded-full bg-white/15 px-4 py-1 text-sm font-medium">
-              Welcome back
-            </p>
+    <main className="min-h-screen bg-slate-50 px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <section className="overflow-hidden rounded-[2rem] bg-gradient-to-br from-emerald-950 via-emerald-900 to-emerald-800 text-white shadow-sm">
+          <div className="relative p-6 sm:p-8 lg:p-10">
+            <div className="absolute -right-20 -top-20 h-56 w-56 rounded-full bg-white/10 blur-3xl" />
+            <div className="absolute -bottom-24 left-10 h-56 w-56 rounded-full bg-amber-300/10 blur-3xl" />
 
-            <h1 className="text-3xl font-bold md:text-4xl">
-              {profile?.full_name || 'TrustPoint Member'}
-            </h1>
+            <div className="relative flex flex-col justify-between gap-8 lg:flex-row lg:items-center">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex rounded-full bg-white/15 px-4 py-1.5 text-xs font-black uppercase tracking-[0.2em] text-emerald-50 ring-1 ring-white/15">
+                    Member Dashboard
+                  </span>
 
-            <p className="mt-3 max-w-2xl text-sm leading-7 text-emerald-50 md:text-base">
-              Your dashboard uses confirmed system records only. Wallet balance
-              comes from your wallet account, Fund Space member count comes from
-              the actual members table, and contributions come from your active
-              Fund Space records.
-            </p>
+                  <span
+                    className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
+                      verificationStatus
+                    )}`}
+                  >
+                    {formatLabel(verificationStatus)}
+                  </span>
+                </div>
+
+                <h1 className="mt-5 max-w-3xl break-words text-[clamp(2rem,5vw,3.75rem)] font-black leading-tight [overflow-wrap:anywhere]">
+                  Welcome back,{' '}
+                  {profileRecord?.full_name || 'TrustPoint Member'}
+                </h1>
+
+                <p className="mt-4 max-w-3xl text-sm leading-7 text-emerald-50 sm:text-base">
+                  Track your verification, Fund Space group, weekly MoMo
+                  payment status, wallet balance, payout position, notifications,
+                  and recent transaction records from one clean dashboard.
+                </p>
+
+                <div className="mt-6 flex flex-wrap gap-3">
+                  <Link
+                    href="/"
+                    className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl bg-white/10 px-5 py-3 text-sm font-bold text-white ring-1 ring-white/20 hover:bg-white/15"
+                  >
+                    <Home size={16} />
+                    Home
+                  </Link>
+
+                  <Link
+                    href="/support"
+                    className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-bold text-emerald-900 hover:bg-emerald-50"
+                  >
+                    <LifeBuoy size={16} />
+                    Support
+                  </Link>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      profileRecord?.id
+                        ? loadDashboard(profileRecord.id, true)
+                        : undefined
+                    }
+                    disabled={refreshing}
+                    className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl bg-amber-300 px-5 py-3 text-sm font-black text-emerald-950 hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <RefreshCw
+                      className={refreshing ? 'animate-spin' : ''}
+                      size={16}
+                    />
+                    Refresh Records
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid min-w-0 gap-3 sm:grid-cols-2 lg:w-[420px]">
+                <HeroMiniCard
+                  label="Trust Score"
+                  value={`${trustScore}`}
+                  helper="Build trust by paying on time."
+                />
+
+                <HeroMiniCard
+                  label="Wallet Currency"
+                  value={walletCurrency}
+                  helper="Default currency for your wallet."
+                />
+
+                <HeroMiniCard
+                  label="Unread Alerts"
+                  value={`${unreadNotificationCount}`}
+                  helper="Recent dashboard notifications."
+                />
+
+                <HeroMiniCard
+                  label="Fund Space"
+                  value={fundSpace ? formatLabel(fundSpace.status) : 'Not Joined'}
+                  helper="Your active contribution group."
+                />
+              </div>
+            </div>
           </div>
+        </section>
 
-          <div className="flex flex-col gap-3 md:min-w-[240px]">
-            <div className="rounded-2xl bg-white/15 p-5 text-left backdrop-blur">
-              <p className="text-sm text-emerald-50">Trust Score</p>
-              <p className="mt-1 text-3xl font-black">{trustScore}</p>
-              <p className="mt-1 text-xs text-emerald-50">
-                Higher score builds more trust.
-              </p>
+        {errorMessage && (
+          <section className="rounded-[1.5rem] border border-red-100 bg-red-50 p-4 text-sm font-medium leading-6 text-red-700">
+            {errorMessage}
+          </section>
+        )}
+
+        {!isVerified && (
+          <section className="rounded-[2rem] border border-amber-200 bg-amber-50 p-5 shadow-sm sm:p-6">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div className="flex min-w-0 gap-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-amber-700">
+                  <ShieldCheck size={24} />
+                </div>
+
+                <div className="min-w-0">
+                  <h2 className="text-lg font-black text-amber-900">
+                    Complete your verification
+                  </h2>
+                  <p className="mt-1 text-sm leading-6 text-amber-800">
+                    You must be verified before joining or paying into a Fund
+                    Space contribution group.
+                  </p>
+                </div>
+              </div>
+
+              <Link
+                href="/dashboard/verification"
+                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl bg-amber-600 px-5 py-3 text-sm font-black text-white hover:bg-amber-700"
+              >
+                Go to Verification
+                <ArrowRight size={16} />
+              </Link>
+            </div>
+          </section>
+        )}
+
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <MetricCard
+            title="Verification"
+            value={formatLabel(verificationStatus)}
+            icon={<BadgeCheck size={24} />}
+            status={verificationStatus}
+            source="Account verification status"
+          />
+
+          <MetricCard
+            title="Available Wallet"
+            value={formatCurrency(availableBalance)}
+            icon={<Wallet size={24} />}
+            status="ACTIVE"
+            source={`Available balance in ${walletCurrency}`}
+          />
+
+          <MetricCard
+            title="Fund Space Members"
+            value={fundSpace ? `${fundSpaceMemberCount}/${maxMembers}` : '0/10'}
+            icon={<Users size={24} />}
+            status={fundSpace?.status || 'FORMING'}
+            source="Active members in your group"
+          />
+
+          <MetricCard
+            title="Current Round"
+            value={`${fundSpace?.current_round_number ?? 0}`}
+            icon={<Clock size={24} />}
+            status={fundSpace?.status || 'NO_GROUP'}
+            source="Current Fund Space round"
+          />
+        </section>
+
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <InfoStatCard
+            title="Total Wallet"
+            value={formatCurrency(totalWalletBalance)}
+            subtitle={`Available ${formatCurrency(
+              availableBalance
+            )} + Locked ${formatCurrency(lockedBalance)}`}
+            icon={<Wallet size={22} />}
+          />
+
+          <InfoStatCard
+            title="Pending Contribution"
+            value={formatCurrency(pendingContributionRemaining)}
+            subtitle={
+              pendingContribution
+                ? `${formatLabel(pendingContribution.status)} contribution`
+                : 'No pending contribution'
+            }
+            icon={<CircleDollarSign size={22} />}
+          />
+
+          <InfoStatCard
+            title="Latest Payout"
+            value={
+              latestPayout ? formatCurrency(latestPayout.net_amount) : 'None'
+            }
+            subtitle={
+              latestPayout
+                ? `${formatLabel(latestPayout.status)} • ${formatDate(
+                    latestPayout.created_at
+                  )}`
+                : 'No payout record yet'
+            }
+            icon={<TrendingUp size={22} />}
+          />
+
+          <InfoStatCard
+            title="Recent Net Movement"
+            value={formatCurrency(confirmedTransactionStats.netRecentMovement)}
+            subtitle={`${formatCurrency(
+              confirmedTransactionStats.creditValue
+            )} credits / ${formatCurrency(
+              confirmedTransactionStats.debitValue
+            )} debits`}
+            icon={<TrendingDown size={22} />}
+          />
+        </section>
+
+        <section className="grid gap-6 xl:grid-cols-3">
+          <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6 xl:col-span-2">
+            <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
+              <div className="min-w-0">
+                <p className="text-xs font-black uppercase tracking-[0.2em] text-emerald-700">
+                  My Fund Space
+                </p>
+
+                <h2 className="mt-2 break-words text-[clamp(1.5rem,4vw,2rem)] font-black text-slate-950 [overflow-wrap:anywhere]">
+                  {fundSpace
+                    ? fundSpace.name || 'My Fund Space'
+                    : 'You have not joined a Fund Space yet'}
+                </h2>
+
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                  {fundSpace
+                    ? `Weekly contribution: ${formatCurrency(
+                        fundSpace.contribution_amount
+                      )}`
+                    : 'Complete verification and join a trusted rotational contribution group when registration is available.'}
+                </p>
+              </div>
+
+              <Link
+                href={
+                  fundSpace
+                    ? `/dashboard/fund-space/${fundSpace.id}`
+                    : '/dashboard/verification'
+                }
+                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl bg-emerald-800 px-5 py-3 text-sm font-black text-white hover:bg-emerald-900"
+              >
+                {fundSpace ? 'View My Fund Space' : 'Start Verification'}
+                <ArrowRight size={16} />
+              </Link>
             </div>
 
-            <button
-              type="button"
-              onClick={() =>
-                profile?.id ? loadDashboard(profile.id, true) : undefined
-              }
-              disabled={refreshing}
-              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-white px-4 py-2 text-sm font-bold text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
-            >
-              <RefreshCw
-                className={refreshing ? 'animate-spin' : ''}
-                size={16}
-              />
-              Refresh Records
-            </button>
+            {fundSpace ? (
+              <div className="mt-8">
+                <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+                  <span className="font-bold text-slate-700">
+                    Member progress
+                  </span>
+                  <span className="font-black text-emerald-800">
+                    {Math.round(formationProgress)}%
+                  </span>
+                </div>
+
+                <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-emerald-700 transition-all"
+                    style={{ width: `${formationProgress}%` }}
+                  />
+                </div>
+
+                <p className="mt-2 text-xs leading-5 text-slate-500">
+                  This count is calculated from active and completed Fund Space
+                  member records.
+                </p>
+
+                <div className="mt-6 grid gap-4 md:grid-cols-3">
+                  <DetailBox
+                    label="Group Status"
+                    value={formatLabel(fundSpace.status)}
+                  />
+
+                  <DetailBox
+                    label="My Payout Position"
+                    value={payoutPosition ? `#${payoutPosition}` : 'Pending'}
+                  />
+
+                  <DetailBox
+                    label="My Member Status"
+                    value={formatLabel(fundSpaceMember?.status || 'ACTIVE')}
+                  />
+                </div>
+
+                <div className="mt-4 grid gap-4 md:grid-cols-3">
+                  <DetailBox
+                    label="Current Round"
+                    value={`${fundSpace.current_round_number ?? 0}`}
+                  />
+
+                  <DetailBox
+                    label="Group Limit"
+                    value={`${maxMembers} members`}
+                  />
+
+                  <DetailBox
+                    label="Started"
+                    value={formatDate(
+                      fundSpace.start_date || fundSpace.created_at
+                    )}
+                  />
+                </div>
+
+                {pendingContribution && (
+                  <div className="mt-6 rounded-[1.5rem] border border-amber-200 bg-amber-50 p-5">
+                    <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
+                      <div className="min-w-0">
+                        <h3 className="font-black text-amber-950">
+                          Pending Weekly Contribution
+                        </h3>
+                        <p className="mt-1 break-words text-sm leading-6 text-amber-800 [overflow-wrap:anywhere]">
+                          Due {formatCurrency(pendingContribution.amount_due)} •
+                          Paid {formatCurrency(pendingContribution.amount_paid)} •
+                          Remaining {formatCurrency(pendingContributionRemaining)}
+                        </p>
+                      </div>
+
+                      <Link
+                        href={`/dashboard/fund-space/${fundSpace.id}`}
+                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl bg-amber-600 px-5 py-3 text-sm font-black text-white hover:bg-amber-700"
+                      >
+                        Submit MoMo Payment
+                        <ArrowRight size={16} />
+                      </Link>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="mt-8 grid gap-4 md:grid-cols-3">
+                <FeatureBox
+                  icon={<ShieldCheck className="h-5 w-5 text-emerald-700" />}
+                  title="Verify account"
+                  description="Submit your ID details and selfie for admin approval."
+                />
+
+                <FeatureBox
+                  icon={<Users className="h-5 w-5 text-emerald-700" />}
+                  title="Join group"
+                  description="After approval, you can be added to an active Fund Space."
+                />
+
+                <FeatureBox
+                  icon={
+                    <CircleDollarSign className="h-5 w-5 text-emerald-700" />
+                  }
+                  title="Pay weekly"
+                  description="Submit your weekly MoMo payment and follow your payout turn."
+                />
+              </div>
+            )}
           </div>
-        </div>
-      </div>
 
-      {errorMessage && (
-        <div className="rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">
-          {errorMessage}
-        </div>
-      )}
+          <aside className="space-y-6">
+            <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+              <h2 className="text-xl font-black text-slate-950">
+                Quick Actions
+              </h2>
 
-      {!isVerified && (
-        <div className="rounded-3xl border border-amber-100 bg-amber-50 p-6">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div className="flex gap-3">
-              <ShieldCheck className="mt-1 h-6 w-6 text-amber-600" />
-              <div>
-                <h2 className="text-lg font-bold text-amber-800">
-                  Complete your verification
-                </h2>
-                <p className="mt-1 text-sm leading-6 text-amber-700">
-                  You must be verified before joining or paying into a Fund
-                  Space contribution group.
+              <div className="mt-5 space-y-3">
+                <QuickAction
+                  href={
+                    fundSpace
+                      ? `/dashboard/fund-space/${fundSpace.id}`
+                      : '/dashboard/verification'
+                  }
+                  label="My Fund Space"
+                />
+                <QuickAction
+                  href="/dashboard/verification"
+                  label="Verification"
+                />
+                <QuickAction
+                  href="/dashboard/fund-space/disputes"
+                  label="Disputes & Complaints"
+                />
+                <QuickAction href="/support" label="Support Center" />
+              </div>
+            </div>
+
+            <div className="rounded-[2rem] border border-emerald-100 bg-emerald-50 p-5 shadow-sm sm:p-6">
+              <div className="flex gap-3">
+                <ShieldCheck className="mt-1 h-6 w-6 shrink-0 text-emerald-800" />
+                <div>
+                  <h3 className="font-black text-emerald-950">
+                    TrustPoint Reminder
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-emerald-800">
+                    Pay your weekly contribution on time to protect your trust
+                    score and keep your Fund Space healthy.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </section>
+
+        <section className="grid gap-6 xl:grid-cols-2">
+          <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+            <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <Bell className="h-5 w-5 text-emerald-700" />
+                  <h2 className="text-xl font-black text-slate-950">
+                    Recent Notifications
+                  </h2>
+                </div>
+
+                <p className="mt-1 text-sm leading-6 text-slate-500">
+                  Latest alerts connected to your TrustPoint account.
                 </p>
               </div>
             </div>
 
-            <Link
-              href="/dashboard/verification"
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-600 px-5 py-3 text-sm font-semibold text-white hover:bg-amber-700"
-            >
-              Go to Verification
-              <ArrowRight size={16} />
-            </Link>
-          </div>
-        </div>
-      )}
+            <div className="mt-5 overflow-hidden rounded-[1.5rem] border border-slate-100">
+              {recentNotifications.length === 0 ? (
+                <div className="p-6 text-center text-sm text-slate-500">
+                  No notifications yet.
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {recentNotifications.map((notification) => {
+                    const href = notification.action_href || '/dashboard';
 
-      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard
-          title="Verification"
-          value={formatLabel(verificationStatus)}
-          icon={<BadgeCheck size={24} />}
-          status={verificationStatus}
-          source="Source: profiles.verification_status"
-        />
+                    return (
+                      <Link
+                        key={notification.id}
+                        href={href}
+                        className="block p-4 hover:bg-slate-50"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="break-words text-sm font-black text-slate-950 [overflow-wrap:anywhere]">
+                              {notification.title || 'Notification'}
+                            </p>
+                            <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
+                              {notification.message || 'Open to view details.'}
+                            </p>
+                            <p className="mt-2 text-xs font-semibold text-slate-400">
+                              {formatDate(notification.created_at)}
+                            </p>
+                          </div>
 
-        <MetricCard
-          title="Available Wallet"
-          value={formatCurrency(availableBalance)}
-          icon={<Wallet size={24} />}
-          status="ACTIVE"
-          source={`Source: wallet_accounts.available_balance (${walletCurrency})`}
-        />
-
-        <MetricCard
-          title="Fund Space Members"
-          value={fundSpace ? `${fundSpaceMemberCount}/${maxMembers}` : '0/10'}
-          icon={<Users size={24} />}
-          status={fundSpace?.status || 'FORMING'}
-          source="Source: fund_space_members active/completed count"
-        />
-
-        <MetricCard
-          title="Current Round"
-          value={`${fundSpace?.current_round_number ?? 0}`}
-          icon={<Clock size={24} />}
-          status={fundSpace?.status || 'NO_GROUP'}
-          source="Source: fund_spaces.current_round_number"
-        />
-      </div>
-
-      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-        <InfoStatCard
-          title="Total Wallet"
-          value={formatCurrency(totalWalletBalance)}
-          subtitle={`Available ${formatCurrency(
-            availableBalance
-          )} + Locked ${formatCurrency(lockedBalance)}`}
-          icon={<Wallet size={22} />}
-        />
-
-        <InfoStatCard
-          title="Pending Contribution"
-          value={formatCurrency(pendingContributionRemaining)}
-          subtitle={
-            pendingContribution
-              ? `${formatLabel(pendingContribution.status)} contribution`
-              : 'No pending contribution'
-          }
-          icon={<CircleDollarSign size={22} />}
-        />
-
-        <InfoStatCard
-          title="Latest Payout"
-          value={latestPayout ? formatCurrency(latestPayout.net_amount) : 'None'}
-          subtitle={
-            latestPayout
-              ? `${formatLabel(latestPayout.status)} • ${formatDate(
-                  latestPayout.created_at
-                )}`
-              : 'No payout record yet'
-          }
-          icon={<TrendingUp size={22} />}
-        />
-
-        <InfoStatCard
-          title="Recent Net Movement"
-          value={formatCurrency(confirmedTransactionStats.netRecentMovement)}
-          subtitle={`${formatCurrency(
-            confirmedTransactionStats.creditValue
-          )} credits / ${formatCurrency(
-            confirmedTransactionStats.debitValue
-          )} debits`}
-          icon={<TrendingDown size={22} />}
-        />
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-3">
-        <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm xl:col-span-2">
-          <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-wide text-emerald-600">
-                Fund Space
-              </p>
-              <h2 className="mt-2 text-2xl font-bold text-gray-900">
-                {fundSpace
-                  ? fundSpace.name || 'My Fund Space'
-                  : 'You have not joined yet'}
-              </h2>
-              <p className="mt-2 text-sm leading-6 text-gray-500">
-                {fundSpace
-                  ? `Weekly contribution: ${formatCurrency(
-                      fundSpace.contribution_amount
-                    )}`
-                  : 'Join a trusted rotational contribution group and start your contribution journey.'}
-              </p>
-            </div>
-
-            <Link
-              href={
-                fundSpace
-                  ? `/dashboard/fund-space/${fundSpace.id}`
-                  : '/dashboard/fund-space/join'
-              }
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-700"
-            >
-              {fundSpace ? 'View My Fund Space' : 'Join Fund Space'}
-              <ArrowRight size={16} />
-            </Link>
-          </div>
-
-          {fundSpace ? (
-            <div className="mt-8">
-              <div className="mb-2 flex items-center justify-between text-sm">
-                <span className="font-medium text-gray-600">
-                  Member progress
-                </span>
-                <span className="font-bold text-emerald-700">
-                  {Math.round(formationProgress)}%
-                </span>
-              </div>
-
-              <div className="h-3 overflow-hidden rounded-full bg-gray-100">
-                <div
-                  className="h-full rounded-full bg-emerald-600 transition-all"
-                  style={{ width: `${formationProgress}%` }}
-                />
-              </div>
-
-              <p className="mt-2 text-xs text-gray-500">
-                Count is calculated directly from active/completed records in
-                `fund_space_members`, not from a saved member_count field.
-              </p>
-
-              <div className="mt-6 grid gap-4 md:grid-cols-3">
-                <DetailBox
-                  label="Group Status"
-                  value={formatLabel(fundSpace.status)}
-                />
-
-                <DetailBox
-                  label="My Payout Position"
-                  value={payoutPosition ? `#${payoutPosition}` : 'Pending'}
-                />
-
-                <DetailBox
-                  label="My Member Status"
-                  value={formatLabel(fundSpaceMember?.status || 'ACTIVE')}
-                />
-              </div>
-
-              <div className="mt-6 grid gap-4 md:grid-cols-3">
-                <DetailBox
-                  label="Current Round"
-                  value={`${fundSpace.current_round_number ?? 0}`}
-                />
-
-                <DetailBox
-                  label="Group Limit"
-                  value={`${maxMembers} members`}
-                />
-
-                <DetailBox
-                  label="Started"
-                  value={formatDate(fundSpace.start_date || fundSpace.created_at)}
-                />
-              </div>
-
-              {pendingContribution && (
-                <div className="mt-6 rounded-2xl border border-amber-100 bg-amber-50 p-5">
-                  <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
-                    <div>
-                      <h3 className="font-bold text-amber-900">
-                        Pending Contribution
-                      </h3>
-                      <p className="mt-1 text-sm text-amber-700">
-                        Due {formatCurrency(pendingContribution.amount_due)} •
-                        Paid {formatCurrency(pendingContribution.amount_paid)} •
-                        Remaining {formatCurrency(pendingContributionRemaining)}
-                      </p>
-                    </div>
-
-                    <Link
-                      href={`/dashboard/fund-space/${fundSpace.id}`}
-                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 py-2 text-sm font-bold text-white hover:bg-amber-700"
-                    >
-                      Pay Contribution
-                      <ArrowRight size={16} />
-                    </Link>
-                  </div>
+                          {!notification.is_read && (
+                            <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-600" />
+                          )}
+                        </div>
+                      </Link>
+                    );
+                  })}
                 </div>
               )}
             </div>
-          ) : (
-            <div className="mt-8 grid gap-4 md:grid-cols-3">
-              <FeatureBox
-                icon={<CircleDollarSign className="h-5 w-5 text-gray-500" />}
-                title="Choose amount"
-                description="Join based on your preferred weekly contribution amount."
-              />
+          </div>
 
-              <FeatureBox
-                icon={<Users className="h-5 w-5 text-gray-500" />}
-                title="Join group"
-                description="System places you into a forming or active group."
-              />
+          <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+            <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
+              <div className="min-w-0">
+                <h2 className="text-xl font-black text-slate-950">
+                  Recent Confirmed Transactions
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-slate-500">
+                  Your latest wallet and system transaction records.
+                </p>
+              </div>
 
-              <FeatureBox
-                icon={<BadgeCheck className="h-5 w-5 text-gray-500" />}
-                title="Receive payout"
-                description="Receive payout when it reaches your turn."
-              />
+              <Link
+                href="/dashboard/transactions"
+                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-2xl border border-slate-200 px-4 py-2 text-sm font-black text-slate-700 hover:bg-slate-50"
+              >
+                View All
+                <ArrowRight size={16} />
+              </Link>
             </div>
-          )}
-        </div>
 
-        <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
-          <h2 className="text-xl font-bold text-gray-900">Quick Actions</h2>
-
-          <div className="mt-5 space-y-3">
-            <QuickAction href="/dashboard/deposit" label="Deposit Money" />
-            <QuickAction href="/dashboard/fund-space" label="Fund Space" />
-            <QuickAction href="/dashboard/transactions" label="Transactions" />
-            <QuickAction href="/dashboard/withdrawals" label="Withdrawals" />
-            <QuickAction href="/dashboard/verification" label="Verification" />
-          </div>
-
-          <div className="mt-6 rounded-2xl bg-emerald-50 p-5">
-            <h3 className="font-bold text-emerald-800">TrustPoint Reminder</h3>
-            <p className="mt-2 text-sm leading-6 text-emerald-700">
-              Always contribute on time to protect your trust score and keep
-              your Fund Space active.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
-        <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
-          <div>
-            <h2 className="text-xl font-bold text-gray-900">
-              Recent Confirmed Transactions
-            </h2>
-            <p className="mt-1 text-sm text-gray-500">
-              These records come from the `transactions` table only. Provider
-              payment attempts are shown separately on the transactions page.
-            </p>
-          </div>
-
-          <Link
-            href="/dashboard/transactions"
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-50"
-          >
-            View All
-            <ArrowRight size={16} />
-          </Link>
-        </div>
-
-        <div className="mt-5 overflow-hidden rounded-2xl border border-gray-100">
-          {recentTransactions.length === 0 ? (
-            <div className="p-6 text-center text-sm text-gray-500">
-              No confirmed transactions yet.
-            </div>
-          ) : (
-            <div className="divide-y divide-gray-100">
-              {recentTransactions.map((transaction) => (
-                <div
-                  key={transaction.id}
-                  className="flex flex-col justify-between gap-3 p-4 md:flex-row md:items-center"
-                >
-                  <div>
-                    <p className="font-bold text-gray-900">
-                      {formatLabel(transaction.type)}
-                    </p>
-                    <p className="mt-1 text-xs text-gray-500">
-                      {formatDate(transaction.created_at)} •{' '}
-                      {formatLabel(transaction.channel)}
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span
-                      className={`rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
-                        transaction.status
-                      )}`}
-                    >
-                      {formatLabel(transaction.status)}
-                    </span>
-
-                    <span
-                      className={`rounded-full border px-3 py-1 text-xs font-bold ${
-                        String(transaction.direction).toUpperCase() === 'CREDIT'
-                          ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
-                          : 'border-red-100 bg-red-50 text-red-700'
-                      }`}
-                    >
-                      {String(transaction.direction).toUpperCase() === 'CREDIT'
-                        ? '+'
-                        : '-'}
-                      {formatCurrency(transaction.amount)}
-                    </span>
-                  </div>
+            <div className="mt-5 overflow-hidden rounded-[1.5rem] border border-slate-100">
+              {recentTransactions.length === 0 ? (
+                <div className="p-6 text-center text-sm text-slate-500">
+                  No confirmed transactions yet.
                 </div>
-              ))}
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {recentTransactions.map((transaction) => {
+                    const isCredit =
+                      String(transaction.direction || '').toUpperCase() ===
+                      'CREDIT';
+
+                    return (
+                      <div
+                        key={transaction.id}
+                        className="flex flex-col justify-between gap-3 p-4 md:flex-row md:items-center"
+                      >
+                        <div className="min-w-0">
+                          <p className="break-words font-black text-slate-950 [overflow-wrap:anywhere]">
+                            {formatLabel(transaction.type)}
+                          </p>
+                          <p className="mt-1 text-xs leading-5 text-slate-500">
+                            {formatDate(transaction.created_at)} •{' '}
+                            {formatLabel(transaction.channel)}
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={`rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
+                              transaction.status
+                            )}`}
+                          >
+                            {formatLabel(transaction.status)}
+                          </span>
+
+                          <span
+                            className={`rounded-full border px-3 py-1 text-xs font-black ${
+                              isCredit
+                                ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
+                                : 'border-red-100 bg-red-50 text-red-700'
+                            }`}
+                          >
+                            {isCredit ? '+' : '-'}
+                            {formatCurrency(transaction.amount)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </div>
+        </section>
       </div>
+    </main>
+  );
+}
+
+function HeroMiniCard({
+  label,
+  value,
+  helper,
+}: {
+  label: string;
+  value: string;
+  helper: string;
+}) {
+  return (
+    <div className="min-w-0 rounded-[1.5rem] bg-white/10 p-4 ring-1 ring-white/15 backdrop-blur">
+      <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-100">
+        {label}
+      </p>
+      <p className="mt-2 break-words text-2xl font-black text-white [overflow-wrap:anywhere]">
+        {value}
+      </p>
+      <p className="mt-1 text-xs leading-5 text-emerald-50">{helper}</p>
     </div>
   );
 }
@@ -939,29 +1196,31 @@ function MetricCard({
 }: {
   title: string;
   value: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
   status: string;
   source: string;
 }) {
   return (
-    <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
-      <div className="mb-4 inline-flex rounded-2xl bg-emerald-50 p-3 text-emerald-700">
+    <div className="min-w-0 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+      <div className="mb-4 inline-flex rounded-2xl bg-emerald-50 p-3 text-emerald-800">
         {icon}
       </div>
 
-      <p className="text-sm text-gray-500">{title}</p>
+      <p className="text-sm font-semibold text-slate-500">{title}</p>
 
-      <h3 className="mt-1 text-2xl font-black text-gray-900">{value}</h3>
+      <h3 className="mt-1 break-words text-[clamp(1.35rem,4vw,1.9rem)] font-black text-slate-950 [overflow-wrap:anywhere]">
+        {value}
+      </h3>
 
       <span
-        className={`mt-3 inline-flex rounded-full border px-3 py-1 text-xs font-bold ${getStatusStyle(
+        className={`mt-3 inline-flex rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
           status
         )}`}
       >
         {formatLabel(status)}
       </span>
 
-      <p className="mt-3 text-xs leading-5 text-gray-400">{source}</p>
+      <p className="mt-3 text-xs leading-5 text-slate-400">{source}</p>
     </div>
   );
 }
@@ -975,26 +1234,32 @@ function InfoStatCard({
   title: string;
   value: string;
   subtitle: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
 }) {
   return (
-    <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm">
+    <div className="min-w-0 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
       <div className="mb-4 inline-flex rounded-2xl bg-slate-50 p-3 text-slate-700">
         {icon}
       </div>
 
-      <p className="text-sm text-gray-500">{title}</p>
-      <h3 className="mt-1 text-2xl font-black text-gray-900">{value}</h3>
-      <p className="mt-2 text-xs leading-5 text-gray-500">{subtitle}</p>
+      <p className="text-sm font-semibold text-slate-500">{title}</p>
+      <h3 className="mt-1 break-words text-[clamp(1.35rem,4vw,1.9rem)] font-black text-slate-950 [overflow-wrap:anywhere]">
+        {value}
+      </h3>
+      <p className="mt-2 break-words text-xs leading-5 text-slate-500 [overflow-wrap:anywhere]">
+        {subtitle}
+      </p>
     </div>
   );
 }
 
 function DetailBox({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl bg-gray-50 p-5">
-      <p className="text-sm text-gray-500">{label}</p>
-      <p className="mt-1 text-lg font-bold text-gray-900">{value}</p>
+    <div className="min-w-0 rounded-[1.5rem] bg-slate-50 p-5">
+      <p className="text-sm font-semibold text-slate-500">{label}</p>
+      <p className="mt-1 break-words text-lg font-black text-slate-950 [overflow-wrap:anywhere]">
+        {value}
+      </p>
     </div>
   );
 }
@@ -1004,15 +1269,15 @@ function FeatureBox({
   title,
   description,
 }: {
-  icon: React.ReactNode;
+  icon: ReactNode;
   title: string;
   description: string;
 }) {
   return (
-    <div className="rounded-2xl bg-gray-50 p-5">
+    <div className="rounded-[1.5rem] bg-slate-50 p-5">
       <div className="mb-3">{icon}</div>
-      <p className="text-sm font-semibold text-gray-800">{title}</p>
-      <p className="mt-1 text-sm text-gray-500">{description}</p>
+      <p className="text-sm font-black text-slate-900">{title}</p>
+      <p className="mt-1 text-sm leading-6 text-slate-500">{description}</p>
     </div>
   );
 }
@@ -1021,10 +1286,10 @@ function QuickAction({ href, label }: { href: string; label: string }) {
   return (
     <Link
       href={href}
-      className="flex items-center justify-between rounded-2xl border border-gray-100 p-4 text-sm font-semibold text-gray-700 hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700"
+      className="flex min-h-14 items-center justify-between gap-3 rounded-[1.25rem] border border-slate-100 p-4 text-sm font-black text-slate-700 hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800"
     >
-      {label}
-      <ArrowRight size={16} />
+      <span className="break-words [overflow-wrap:anywhere]">{label}</span>
+      <ArrowRight className="shrink-0" size={16} />
     </Link>
   );
 }
